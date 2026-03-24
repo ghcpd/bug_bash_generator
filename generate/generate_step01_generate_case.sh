@@ -15,6 +15,10 @@
 #   Each case = one ForEach item = one Batch node = one gh copilot instance.
 #   Parallelism is controlled by ADF batchCount (= number of Batch nodes).
 #   No in-process parallelism — avoids gh copilot single-instance conflicts.
+#
+# Environment variables (optional):
+#   DEPS_IMAGE_OVERRIDE — Full image reference (e.g. myacr.azurecr.io/bugbash-deps:tag).
+#                         When set, the script pulls this image instead of building locally.
 # ============================================================================
 set -ex
 
@@ -62,29 +66,8 @@ if [ -z "$PY" ]; then
   echo "Using Python (no pip yet): $PY ($($PY --version 2>&1))"
 fi
 
-# Ensure pip is available — handle PEP 668 externally-managed environments
-if ! $PY -m pip --version 2>/dev/null; then
-  echo "pip not found for $PY — bootstrapping..."
-  # Try ensurepip first
-  $PY -m ensurepip --user 2>&1 || $PY -m ensurepip 2>&1 || true
-  # If still no pip, use get-pip.py with --break-system-packages (PEP 668)
-  if ! $PY -m pip --version 2>/dev/null; then
-    echo "ensurepip unavailable — downloading get-pip.py (--break-system-packages)..."
-    curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
-      && $PY /tmp/get-pip.py --user --break-system-packages 2>&1 || true
-  fi
-fi
-echo "pip: $($PY -m pip --version 2>&1 || echo 'STILL NOT FOUND')"
-
-# Ensure pytest is installed
-$PY -m pip install --user --break-system-packages pytest 2>&1 \
-  || $PY -m pip install --user pytest 2>&1 \
-  || $PY -m pip install pytest 2>&1 || true
-if ! $PY -c "import pytest" 2>/dev/null; then
-  echo "WARN: pytest not importable — force reinstall..." >&2
-  $PY -m pip install --user --break-system-packages --force-reinstall pytest 2>&1 || true
-fi
-echo "pytest: $($PY -m pytest --version 2>&1 || echo 'NOT FOUND')"
+# NOTE: pip/pytest are installed inside the Docker image, not on the host.
+# Host only needs Python for orchestration scripts (generate_step02..04).
 
 # ── Preflight: verify GitHub auth BEFORE doing any real work ─────────────────
 echo "=== Preflight: checking GitHub auth ==="
@@ -330,203 +313,43 @@ else
     echo "=== Feature direction: no suitable target found, agent will choose freely ==="
 fi
 
-# Install dependencies (runtime + test)
-# Strategy 0: if uv.lock exists, use uv to install locked dependencies into current python
-UV_USED=false
-if [ -f "uv.lock" ]; then
-    echo "=== Detected uv.lock — using uv for precise dependency installation ==="
-    $PY -m pip install uv 2>/dev/null || true
-    if command -v uv &>/dev/null; then
-        # Use uv export to dump all locked dependencies (including all groups) as requirements.txt
-        # Then install with pip into the current python environment
-        if uv export --frozen --no-hashes --all-groups --all-extras -o /tmp/_uv_requirements.txt 2>/dev/null; then
-            echo "=== Installing locked dependencies from uv.lock (all groups + extras) ==="
-            $PY -m pip install -r /tmp/_uv_requirements.txt 2>/dev/null && UV_USED=true && echo "=== uv locked deps installed ===" || echo "WARN: pip install from uv export failed" >&2
-            rm -f /tmp/_uv_requirements.txt
-        else
-            echo "WARN: uv export failed, falling back to pip" >&2
-        fi
-        # Also install the project itself
-        $PY -m pip install -e . 2>/dev/null || SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 $PY -m pip install -e . 2>/dev/null || true
-    else
-        echo "WARN: uv not available after install, falling back to pip" >&2
+# Install dependencies (runtime + test) — Docker image
+# If DEPS_IMAGE_OVERRIDE is set (e.g. from ACR), pull it; otherwise build locally.
+if [ -n "${DEPS_IMAGE_OVERRIDE:-}" ]; then
+    DEPS_IMAGE="$DEPS_IMAGE_OVERRIDE"
+    echo "=== Using pre-built image from registry: ${DEPS_IMAGE} ==="
+    docker pull "$DEPS_IMAGE" 2>&1
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to pull image ${DEPS_IMAGE}" >&2
+        exit 1
+    fi
+else
+    echo "=== Generating dependency Dockerfile ==="
+    DEPS_DOCKERFILE="$WORK_DIR/repo/Dockerfile.deps"
+    $PY "$SCRIPT_DIR/generate_deps_dockerfile.py" \
+        --repo-dir "$WORK_DIR/repo" \
+        --python "$PY" \
+        --output "$DEPS_DOCKERFILE"
+
+    DEPS_IMAGE="bugbash-deps-${REPO_SLUG,,}-${CASE_INDEX}"
+    echo "=== Building dependency image: ${DEPS_IMAGE} ==="
+    docker build -f "$DEPS_DOCKERFILE" -t "$DEPS_IMAGE" "$WORK_DIR/repo" 2>&1
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Docker build failed — cannot proceed without container" >&2
+        exit 1
     fi
 fi
+echo "=== Dependency image ready: ${DEPS_IMAGE} ==="
 
-# Always run pip-based installation (uv may have covered some deps, pip fills the rest)
-BASE_INSTALL_OK=false
-if [ "$UV_USED" = "true" ]; then BASE_INSTALL_OK=true; fi  # uv already installed the project
-if $PY -m pip install -e . 2>/dev/null; then
-    BASE_INSTALL_OK=true
-elif SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 $PY -m pip install -e . 2>/dev/null; then
-    BASE_INSTALL_OK=true
-else
-    echo "WARN: Base package install failed (may need system libs or C compiler). Trying pip install without editable..." >&2
-    if $PY -m pip install . 2>/dev/null || SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 $PY -m pip install . 2>/dev/null; then
-        BASE_INSTALL_OK=true
-    else
-        echo "WARN: Package install failed entirely. Tests will likely not work." >&2
-    fi
-fi
-
-# Install test/dev dependencies — only try extras if base package installed successfully
-# Skip entirely if uv.lock already installed all deps (PEP 735 groups included)
-echo "=== Installing test dependencies ==="
-
-if [ "$UV_USED" = "true" ]; then
-    echo "=== uv.lock already installed all deps (including dev/test groups) — skipping extras ==="
-elif [ "$BASE_INSTALL_OK" != "true" ]; then
-    echo "WARN: Skipping extras/dependency-groups install because base package failed to build." >&2
-else
-
-# Strategy 1a: parse pyproject.toml [project.optional-dependencies] — install via pip extras
-OPTIONAL_GROUPS=$(python3 -c "
-import sys
-try:
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib
-    with open('pyproject.toml', 'rb') as f:
-        data = tomllib.load(f)
-    groups = list(data.get('project', {}).get('optional-dependencies', {}).keys())
-    extras = data.get('tool', {}).get('setuptools', {}).get('extras_require', {})
-    groups.extend(extras.keys())
-    for g in sorted(set(groups)):
-        print(g)
-except Exception:
-    pass
-" 2>/dev/null)
-
-if [ -n "$OPTIONAL_GROUPS" ]; then
-    echo "Found optional-dependency groups: $OPTIONAL_GROUPS"
-    for group in $OPTIONAL_GROUPS; do
-        echo "Installing optional group: [$group]"
-        $PY -m pip install -e ".[$group]" 2>/dev/null \
-            || SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 $PY -m pip install -e ".[$group]" 2>/dev/null \
-            || echo "  WARN: failed to install [$group]"
-    done
-else
-    echo "No optional-dependency groups found in pyproject.toml; trying common extra names"
-    for extra in test testing tests dev all async; do
-        $PY -m pip install -e ".[$extra]" 2>/dev/null && echo "Installed extra: $extra" || true
-        SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 $PY -m pip install -e ".[$extra]" 2>/dev/null || true
-    done
-fi
-
-# Strategy 1b: parse pyproject.toml [dependency-groups] (PEP 735) — install packages directly
-DEP_GROUP_PKGS=$(python3 -c "
-import sys
-try:
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib
-    with open('pyproject.toml', 'rb') as f:
-        data = tomllib.load(f)
-    dep_groups = data.get('dependency-groups', {})
-    if not dep_groups:
-        sys.exit(0)
-    # Install ALL dependency-group packages — don't guess which groups are test-related
-    for group_name, pkgs in dep_groups.items():
-        for pkg in pkgs:
-            if isinstance(pkg, str):
-                stripped = pkg.strip()
-                if stripped and not stripped.startswith('{'):
-                    print(stripped)
-            elif isinstance(pkg, dict) and 'include-group' in pkg:
-                # Handle {include-group = "xxx"} references
-                ref = pkg['include-group']
-                for p in dep_groups.get(ref, []):
-                    if isinstance(p, str):
-                        s = p.strip()
-                        if s and not s.startswith('{'):
-                            print(s)
-except Exception:
-    pass
-" 2>/dev/null)
-
-if [ -n "$DEP_GROUP_PKGS" ]; then
-    echo "Found PEP 735 dependency-group packages:"
-    echo "$DEP_GROUP_PKGS"
-    echo "$DEP_GROUP_PKGS" | while read -r pkg; do
-        echo "Installing dependency-group package: $pkg"
-        $PY -m pip install "$pkg" 2>/dev/null || true
-    done
-fi
-
-fi  # end of UV_USED/BASE_INSTALL_OK check for extras/dependency-groups
-
-# Strategy 2: install from common requirements files (always try, even if base install failed)
-# Check root-level requirements files
-for reqfile in requirements-test.txt requirements-dev.txt requirements_test.txt requirements_dev.txt test-requirements.txt dev-requirements.txt; do
-    if [ -f "$reqfile" ]; then
-        echo "Installing from $reqfile"
-        $PY -m pip install -r "$reqfile" 2>/dev/null || true
-    fi
-done
-# Check requirements/ subdirectory (common pattern: requirements/tests.txt, requirements/dev.txt, etc.)
-if [ -d "requirements" ]; then
-    for reqfile in requirements/test.txt requirements/tests.txt requirements/testing.txt requirements/dev.txt requirements/ci.txt; do
-        if [ -f "$reqfile" ]; then
-            echo "Installing from $reqfile"
-            $PY -m pip install -r "$reqfile" 2>/dev/null || true
-        fi
-    done
-fi
-# Check docs/requirements.txt and similar nested patterns
-for reqfile in $(find . -maxdepth 2 -name 'requirements*.txt' -not -path './build/*' -not -path './.tox/*' 2>/dev/null); do
-    echo "Installing from $reqfile"
-    $PY -m pip install -r "$reqfile" 2>/dev/null || true
-done
-
-# Strategy 3: parse tox.ini deps if present
-if [ -f "tox.ini" ]; then
-    echo "Parsing tox.ini for test dependencies"
-    python3 -c "
-import configparser, sys
-c = configparser.ConfigParser()
-c.read('tox.ini')
-for sec in c.sections():
-    if 'testenv' in sec:
-        deps = c.get(sec, 'deps', fallback='')
-        for line in deps.strip().splitlines():
-            line = line.strip()
-            if line and not line.startswith('-') and not line.startswith('#'):
-                print(line)
-        break
-" 2>/dev/null | while read -r dep; do
-        $PY -m pip install "$dep" 2>/dev/null || true
-    done
-fi
-
-# Strategy 4: parse setup.py extras_require if present and no pyproject.toml groups found
-if [ -z "$OPTIONAL_GROUPS" ] && [ -f "setup.py" ]; then
-    python3 -c "
-import ast, sys
-with open('setup.py') as f:
-    tree = ast.parse(f.read())
-for node in ast.walk(tree):
-    if isinstance(node, ast.keyword) and node.arg == 'extras_require':
-        if isinstance(node.value, ast.Dict):
-            for key in node.value.keys:
-                if isinstance(key, ast.Constant):
-                    print(key.value)
-" 2>/dev/null | while read -r extra; do
-        echo "Installing setup.py extra: [$extra]"
-        $PY -m pip install -e ".[$extra]" 2>/dev/null || true
-    done
-fi
-
+# Helper: run commands inside the deps container with the work dir mounted
+docker_run() {
+    docker run --rm \
+        -v "$WORK_DIR:$WORK_DIR" \
+        -w "$WORK_DIR/repo" \
+        "$DEPS_IMAGE" \
+        "$@"
+}
 echo "=== Test dependency installation complete ==="
-
-# Re-install the project itself in editable mode to ensure local dev version
-# takes precedence over any release version that pip may have pulled in as a
-# transitive dependency during test dep installation.
-echo "=== Re-installing project (editable) to restore local dev version ==="
-$PY -m pip install -e . --no-deps 2>/dev/null \
-    || SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 $PY -m pip install -e . --no-deps 2>/dev/null \
-    || true
 
 # ── Baseline: require original tests and verify clean pass-to-pass baseline ──
 NATIVE_TESTS_ENABLED="${NATIVE_TESTS_ENABLED:-1}"
@@ -556,7 +379,8 @@ if [ "$NATIVE_TESTS_ENABLED" = "1" ]; then
     else
         echo "=== Baseline: verifying native tests on clean repo ==="
     BASELINE_EXIT=0
-    timeout "$NATIVE_TEST_TIMEOUT" "$PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BASELINE_JSON" \
+    timeout "$NATIVE_TEST_TIMEOUT" docker_run \
+        "$PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BASELINE_JSON" \
         -q --rootdir "$WORK_DIR/repo" -o addopts= \
         > "$NATIVE_BASELINE_LOG" 2>&1 || BASELINE_EXIT=$?
 
@@ -650,8 +474,21 @@ The repository is already cloned at the current working directory.
 - Modify existing files and/or add new ones as needed
 - Follow the project's coding style and conventions
 
+### Docker Environment (MANDATORY)
+A Docker image \`${DEPS_IMAGE}\` has been pre-built with all runtime and test dependencies installed.
+**ALL shell commands that execute project code or run tests MUST run inside this container:**
+\`\`\`
+docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} <command>
+\`\`\`
+Examples:
+- Run tests: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest -x --timeout=60\`
+- Run a Python script: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY script.py\`
+
+You may still use \`cat\`, \`git\`, \`ls\`, \`find\` etc. directly on the host for reading files.
+**Do NOT \`pip install\` on the host** — the container already has everything.
+
 ### Step 3: Run Existing Tests
-- Run: \`$PY -m pytest -x --timeout=60\` (or the project's test command)
+- Run: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest -x --timeout=60\`
 - If ALL existing tests pass: go back to Step 2 for the next feature (up to 3 features total)
 - If ANY existing test fails: move to Step 4
 - If you completed all 3 features and all tests still pass: output FEATURES_COMPLETE and stop
@@ -664,19 +501,19 @@ The repository is already cloned at the current working directory.
 - Test observable behavior, not source code content
 
 ### Step 5: Verify FAIL
-- Run: \`$PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
+- Run: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
 - Confirm the synthetic tests FAIL on the current code
 - If tests PASS, your reproducer is wrong — revise it
 
 ### Step 6: Verify PASS
 - Revert all changes: \`git checkout -- .\`
-- Run: \`$PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
+- Run: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
 - Confirm the synthetic tests PASS on the original code
 - If tests FAIL, your reproducer is wrong — revise it
 
 ### Step 7: Restore modified state
 - Re-apply your changes so the repo ends in the modified state
-- Verify: \`$PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs\` should FAIL again
+- Verify: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs\` should FAIL again
 
 ### Step 8: Review actual diff and write issue_text (CRITICAL — do this LAST)
 - Run: \`git diff -- '*.py' ':!test_synthetic_*'\`
@@ -944,21 +781,11 @@ VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"  # 2 minutes for each pytest run
 
 cd "$WORK_DIR/repo"
 
-# Pre-check: ensure pytest is importable before running verification
-if ! $PY -c "import pytest" 2>/dev/null; then
-    echo "ERROR: pytest not found for $PY before verification. Re-installing..." >&2
-    $PY -m pip install --user pytest 2>&1 || $PY -m pip install pytest 2>&1 || true
-    if ! $PY -c "import pytest" 2>/dev/null; then
-        echo "ERROR: pytest still not importable by $PY after re-install. Cannot verify." >&2
-        continue
-    fi
-fi
-echo "pytest OK: $($PY -m pytest --version 2>&1)"
-
 # Step A: Tests must FAIL on buggy code (current state)
 echo "--- Verifying tests FAIL on buggy code ---"
 FAIL_EXIT=0
-timeout "$VERIFY_TIMEOUT" $PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
+timeout "$VERIFY_TIMEOUT" docker_run \
+    $PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
     > "$WORK_DIR/verify_fail.txt" 2>&1 || FAIL_EXIT=$?
 tail -20 "$WORK_DIR/verify_fail.txt"
 
@@ -982,7 +809,8 @@ git checkout HEAD -- . 2>/dev/null || true
 git clean -fd -e "test_synthetic_*.py" 2>/dev/null || true
 
 PASS_EXIT=0
-timeout "$VERIFY_TIMEOUT" $PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
+timeout "$VERIFY_TIMEOUT" docker_run \
+    $PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
     > "$WORK_DIR/verify_pass.txt" 2>&1 || PASS_EXIT=$?
 tail -20 "$WORK_DIR/verify_pass.txt"
 
@@ -1006,7 +834,8 @@ if [ "$NATIVE_BASELINE_CONFIRMED" = "true" ]; then
     NATIVE_BUGGY_JSON="$WORK_DIR/native_tests_buggy_attempt_${ATTEMPT}.json"
     NATIVE_BUGGY_LOG="$WORK_DIR/native_tests_buggy_attempt_${ATTEMPT}.log"
     NATIVE_BUGGY_EXIT=0
-    timeout "$NATIVE_TEST_TIMEOUT" "$PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BUGGY_JSON" \
+    timeout "$NATIVE_TEST_TIMEOUT" docker_run \
+        "$PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BUGGY_JSON" \
         -q --rootdir "$WORK_DIR/repo" -o addopts= \
         > "$NATIVE_BUGGY_LOG" 2>&1 || NATIVE_BUGGY_EXIT=$?
 
