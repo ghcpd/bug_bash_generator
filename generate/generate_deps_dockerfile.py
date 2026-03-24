@@ -138,6 +138,143 @@ def _parse_setup_py_extras(repo: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Python version detection
+# ---------------------------------------------------------------------------
+
+# Supported slim image tags, newest first
+_SUPPORTED_VERSIONS = ["3.13", "3.12", "3.11", "3.10", "3.9", "3.8"]
+_DEFAULT_VERSION = "3.11"
+
+
+def _detect_python_version(repo: Path) -> str:
+    """Best-effort detection of the Python version a project needs.
+
+    Sources checked (first match wins on specificity; otherwise highest
+    compatible version is picked):
+      1. .python-version file  (exact, e.g. "3.12.1" → "3.12")
+      2. pyproject.toml  requires-python  (e.g. ">=3.10" → pick highest compatible)
+      3. setup.cfg  python_requires
+      4. setup.py   python_requires string literal
+      5. tox.ini    basepython / envlist  (e.g. py312 → "3.12")
+      6. Fallback → _DEFAULT_VERSION
+    """
+
+    # 1. .python-version
+    pv = repo / ".python-version"
+    if pv.exists():
+        raw = pv.read_text(encoding="utf-8").strip().splitlines()[0].strip()
+        m = re.match(r"(3\.\d+)", raw)
+        if m and m.group(1) in _SUPPORTED_VERSIONS:
+            return m.group(1)
+
+    # 2. pyproject.toml requires-python
+    if tomllib is not None:
+        pp = repo / "pyproject.toml"
+        if pp.exists():
+            try:
+                data = tomllib.loads(pp.read_text(encoding="utf-8"))
+                rp = data.get("project", {}).get("requires-python", "")
+                ver = _parse_requires_python(rp)
+                if ver:
+                    return ver
+            except Exception:
+                pass
+
+    # 3. setup.cfg python_requires
+    setup_cfg = repo / "setup.cfg"
+    if setup_cfg.exists():
+        import configparser as _cp
+        cfg = _cp.ConfigParser()
+        try:
+            cfg.read(str(setup_cfg), encoding="utf-8")
+            rp = cfg.get("options", "python_requires", fallback="")
+            ver = _parse_requires_python(rp)
+            if ver:
+                return ver
+        except Exception:
+            pass
+
+    # 4. setup.py python_requires literal
+    sp = repo / "setup.py"
+    if sp.exists():
+        try:
+            text = sp.read_text(encoding="utf-8", errors="ignore")
+            m = re.search(r'python_requires\s*=\s*["\']([^"\']+)["\']', text)
+            if m:
+                ver = _parse_requires_python(m.group(1))
+                if ver:
+                    return ver
+        except Exception:
+            pass
+
+    # 5. tox.ini basepython / envlist
+    tox_ini = repo / "tox.ini"
+    if tox_ini.exists():
+        try:
+            text = tox_ini.read_text(encoding="utf-8", errors="ignore")
+            # basepython = python3.12
+            m = re.search(r'basepython\s*=\s*python(3\.\d+)', text)
+            if m and m.group(1) in _SUPPORTED_VERSIONS:
+                return m.group(1)
+            # envlist = py312, py311 → pick highest
+            m = re.search(r'envlist\s*=\s*(.+)', text)
+            if m:
+                found = re.findall(r'py(3)(\d+)', m.group(1))
+                candidates = [f"3.{minor}" for _, minor in found]
+                for v in _SUPPORTED_VERSIONS:
+                    if v in candidates:
+                        return v
+        except Exception:
+            pass
+
+    return _DEFAULT_VERSION
+
+
+def _parse_requires_python(spec: str) -> str | None:
+    """Extract the best Docker image version from a PEP 440 requires-python spec.
+
+    Examples:
+        '>=3.10'       → '3.13'  (highest supported that satisfies)
+        '>=3.10,<3.13' → '3.12'
+        '==3.11.*'     → '3.11'
+    """
+    spec = spec.strip()
+    if not spec:
+        return None
+
+    # ==3.X or ==3.X.* → exact
+    m = re.match(r'==\s*(3\.\d+)', spec)
+    if m and m.group(1) in _SUPPORTED_VERSIONS:
+        return m.group(1)
+
+    # Parse >= lower bound and optional < upper bound
+    lower = None
+    upper = None  # exclusive upper bound
+    for part in re.split(r'\s*,\s*', spec):
+        m = re.match(r'>=\s*(3\.\d+)', part)
+        if m:
+            lower = m.group(1)
+        m = re.match(r'<\s*(3\.\d+)', part)
+        if m:
+            upper = m.group(1)
+
+    if lower is None:
+        return None
+
+    # Pick highest supported version that satisfies the bounds
+    for v in _SUPPORTED_VERSIONS:
+        if _ver_tuple(v) >= _ver_tuple(lower):
+            if upper and _ver_tuple(v) >= _ver_tuple(upper):
+                continue
+            return v
+    return None
+
+
+def _ver_tuple(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in v.split("."))
+
+
+# ---------------------------------------------------------------------------
 # Dockerfile generation
 # ---------------------------------------------------------------------------
 
@@ -154,6 +291,8 @@ def generate_dockerfile(
     has_pyproject = (repo / "pyproject.toml").exists()
     has_setup_py = (repo / "setup.py").exists()
     has_tox = (repo / "tox.ini").exists()
+
+    python_version = _detect_python_version(repo)
 
     optional_groups = _parse_pyproject_optional_groups(repo)
     dep_group_pkgs = _parse_pyproject_dep_groups(repo)
@@ -175,7 +314,7 @@ def generate_dockerfile(
 
     # -- header
     lines.append("# Auto-generated — installs runtime + test dependencies")
-    lines.append(f"FROM python:3.11-slim")
+    lines.append(f"FROM python:{python_version}-slim")
     lines.append("")
     lines.append("# OS-level tooling needed by many Python packages")
     lines.append("RUN apt-get update && apt-get install -y --no-install-recommends \\")
