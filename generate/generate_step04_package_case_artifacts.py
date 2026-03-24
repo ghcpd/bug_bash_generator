@@ -88,39 +88,17 @@ def create_snapshot(repo_dir: str, case: dict, snapshot_dir: str) -> None:
     github_dir = os.path.join(snapshot_dir, ".github")
     os.makedirs(github_dir, exist_ok=True)
 
-    # Read Docker image from env var DEPS_IMAGE_OVERRIDE (set during generation)
-    deps_image = os.environ.get("DEPS_IMAGE_OVERRIDE", "")
-    has_dockerfile = os.path.isfile(os.path.join(snapshot_dir, "Dockerfile.deps"))
-
     with open(os.path.join(github_dir, "copilot-instructions.md"), "w", encoding="utf-8") as f:
-        if deps_image:
-            # Pre-built image available (e.g. from ACR)
-            f.write(
-                "# Docker Environment\n\n"
-                f"A pre-built Docker image with all dependencies is available:\n\n"
-                f"```\n{deps_image}\n```\n\n"
-                "**ALL project code and tests MUST run inside this container:**\n\n"
-                "```bash\n"
-                f'docker run --rm -v "$(pwd):/repo" -w /repo {deps_image} {test_cmd}\n'
-                "```\n\n"
-                "Do NOT `pip install` on the host \u2014 the container already has everything.\n\n"
-            )
-        elif has_dockerfile:
-            # No registry image, but Dockerfile.deps in repo
-            f.write(
-                "# Docker Environment\n\n"
-                "A `Dockerfile.deps` is included in the repo root with all runtime and test "
-                "dependencies pre-configured.\n\n"
-                "**Build the image, then run all project code and tests inside it:**\n\n"
-                "```bash\n"
-                "docker build -f Dockerfile.deps -t deps .\n"
-                f'docker run --rm -v "$(pwd):/repo" -w /repo deps {test_cmd}\n'
-                "```\n\n"
-                "Do NOT `pip install` on the host \u2014 the container already has everything.\n\n"
-            )
-        else:
-            f.write(f"# Build Command\n\n```bash\n{setup_cmd}\n```\n\n")
-        f.write(f"# Workflow\n\n```bash\n{test_cmd}\n```\n")
+        f.write(
+            "# Workflow\n\n"
+            "The environment variable `DEPS_IMAGE` contains the Docker image with all dependencies pre-installed.\n"
+            "**All project code and tests MUST run inside this container:**\n\n"
+            "```bash\n"
+            f'docker run --rm -v "$(pwd):/repo" -w /repo "$DEPS_IMAGE" {test_cmd}\n'
+            "```\n\n"
+            "Do NOT `pip install` on the host — the container already has everything.\n"
+            "Make sure all tests passed after making changes.\n"
+        )
 
 
 def package_targz(snapshot_dir: str, output_path: str) -> None:
