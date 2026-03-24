@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import hashlib
+import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -273,6 +276,77 @@ def generate_dockerfile(
 
 
 # ---------------------------------------------------------------------------
+# JSONL map: repo_slug → {dockerfile_hash, dockerfile_content, acr_image}
+# ---------------------------------------------------------------------------
+
+def _hash_dockerfile(content: str) -> str:
+    """SHA-256 of the Dockerfile content (whitespace-normalised)."""
+    return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+
+
+def _map_lookup(map_path: Path, repo_slug: str, dockerfile_content: str) -> str | None:
+    """Return the acr_image if repo_slug exists in the map with same hash, else None."""
+    if not map_path.exists():
+        return None
+    target_hash = _hash_dockerfile(dockerfile_content)
+    with open(map_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("repo_slug") == repo_slug and entry.get("dockerfile_hash") == target_hash:
+                return entry.get("acr_image")
+    return None
+
+
+def _map_register(
+    map_path: Path,
+    repo_slug: str,
+    dockerfile_content: str,
+    acr_image: str,
+) -> None:
+    """Add or update an entry in the JSONL map (dedup by repo_slug)."""
+    new_hash = _hash_dockerfile(dockerfile_content)
+    entries: dict[str, dict] = {}
+
+    # Load existing entries
+    if map_path.exists():
+        with open(map_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    slug = entry.get("repo_slug", "")
+                    if slug:
+                        entries[slug] = entry
+                except json.JSONDecodeError:
+                    continue
+
+    # Upsert
+    entries[repo_slug] = {
+        "repo_slug": repo_slug,
+        "dockerfile_hash": new_hash,
+        "dockerfile_content": dockerfile_content,
+        "acr_image": acr_image,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Atomic write
+    map_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = str(map_path) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for e in entries.values():
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    os.replace(tmp, str(map_path))
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -283,6 +357,8 @@ def main() -> int:
     parser.add_argument("--repo-dir", required=True, help="Path to the cloned repo")
     parser.add_argument("--output", default=None, help="Write Dockerfile to this path (default: stdout)")
     parser.add_argument("--python", default="python3", help="Python binary name inside the image")
+    parser.add_argument("--map", default=None, help="Path to JSONL map file for image caching")
+    parser.add_argument("--repo-slug", default=None, help="owner__repo slug (required with --map)")
     args = parser.parse_args()
 
     repo = Path(args.repo_dir).resolve()
@@ -290,8 +366,21 @@ def main() -> int:
         print(f"ERROR: repo-dir does not exist: {repo}", file=sys.stderr)
         return 1
 
+    # Generate the Dockerfile content (always — needed for hash comparison)
     dockerfile = generate_dockerfile(repo, python_bin=args.python)
 
+    # Check the map: if an image already exists for this repo + same Dockerfile, print it and exit
+    if args.map and args.repo_slug:
+        map_path = Path(args.map)
+        cached = _map_lookup(map_path, args.repo_slug, dockerfile)
+        if cached:
+            # Print the cached image to stdout so the caller can use it
+            print(cached)
+            print(f"MAP_HIT: {args.repo_slug} → {cached}", file=sys.stderr)
+            return 0
+        print(f"MAP_MISS: {args.repo_slug} — will generate Dockerfile", file=sys.stderr)
+
+    # Write the Dockerfile
     if args.output:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -299,6 +388,13 @@ def main() -> int:
         print(f"Wrote {out}", file=sys.stderr)
     else:
         sys.stdout.write(dockerfile)
+
+    # Register a placeholder in the map (acr_image will be updated after build+push)
+    if args.map and args.repo_slug:
+        map_path = Path(args.map)
+        local_tag = f"bugbash-deps-{args.repo_slug.lower()}"
+        _map_register(map_path, args.repo_slug, dockerfile, local_tag)
+        print(f"MAP_REGISTERED: {args.repo_slug} → {local_tag} (pending build)", file=sys.stderr)
 
     return 0
 

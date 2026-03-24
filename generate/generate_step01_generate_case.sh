@@ -314,29 +314,58 @@ else
 fi
 
 # Install dependencies (runtime + test) — Docker image
-# If DEPS_IMAGE_OVERRIDE is set (e.g. from ACR), pull it; otherwise build locally.
+# Resolution order:
+#   1. DEPS_IMAGE_OVERRIDE env var (explicit image override)
+#   2. Local Docker image exists for this repo → reuse directly (no map)
+#   3. JSONL map lookup (same repo + same Dockerfile hash → pull ACR image)
+#   4. Generate Dockerfile, build locally, register ACR image in map
+DOCKER_MAP="${DOCKER_MAP:-${OUTPUT_BASE}/map/docker-map.jsonl}"
+LOCAL_IMAGE_TAG="bugbash-deps-${REPO_SLUG,,}"
+
 if [ -n "${DEPS_IMAGE_OVERRIDE:-}" ]; then
     DEPS_IMAGE="$DEPS_IMAGE_OVERRIDE"
-    echo "=== Using pre-built image from registry: ${DEPS_IMAGE} ==="
+    echo "=== Using pre-built image (env override): ${DEPS_IMAGE} ==="
     docker pull "$DEPS_IMAGE" 2>&1
     if [ $? -ne 0 ]; then
         echo "ERROR: Failed to pull image ${DEPS_IMAGE}" >&2
         exit 1
     fi
+elif docker image inspect "$LOCAL_IMAGE_TAG" &>/dev/null; then
+    # Local image already built (e.g. by a previous case for the same repo)
+    DEPS_IMAGE="$LOCAL_IMAGE_TAG"
+    echo "=== Reusing local image: ${DEPS_IMAGE} ==="
 else
     echo "=== Generating dependency Dockerfile ==="
     DEPS_DOCKERFILE="$WORK_DIR/repo/Dockerfile.deps"
-    $PY "$SCRIPT_DIR/generate_deps_dockerfile.py" \
+
+    # Check map for an ACR image with matching Dockerfile hash
+    CACHED_IMAGE=$($PY "$SCRIPT_DIR/generate_deps_dockerfile.py" \
         --repo-dir "$WORK_DIR/repo" \
         --python "$PY" \
-        --output "$DEPS_DOCKERFILE"
+        --map "$DOCKER_MAP" \
+        --repo-slug "$REPO_SLUG" 2>/dev/null) || true
 
-    DEPS_IMAGE="bugbash-deps-${REPO_SLUG,,}-${CASE_INDEX}"
-    echo "=== Building dependency image: ${DEPS_IMAGE} ==="
-    docker build -f "$DEPS_DOCKERFILE" -t "$DEPS_IMAGE" "$WORK_DIR/repo" 2>&1
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Docker build failed — cannot proceed without container" >&2
-        exit 1
+    if [ -n "$CACHED_IMAGE" ] && docker pull "$CACHED_IMAGE" 2>&1; then
+        # Tag it locally so future cases skip the pull
+        docker tag "$CACHED_IMAGE" "$LOCAL_IMAGE_TAG" 2>/dev/null || true
+        DEPS_IMAGE="$LOCAL_IMAGE_TAG"
+        echo "=== Map hit: pulled ${CACHED_IMAGE}, tagged as ${DEPS_IMAGE} ==="
+    else
+        # No hit → generate Dockerfile and build
+        $PY "$SCRIPT_DIR/generate_deps_dockerfile.py" \
+            --repo-dir "$WORK_DIR/repo" \
+            --python "$PY" \
+            --output "$DEPS_DOCKERFILE" \
+            --map "$DOCKER_MAP" \
+            --repo-slug "$REPO_SLUG"
+
+        DEPS_IMAGE="$LOCAL_IMAGE_TAG"
+        echo "=== Building dependency image: ${DEPS_IMAGE} ==="
+        docker build -f "$DEPS_DOCKERFILE" -t "$DEPS_IMAGE" "$WORK_DIR/repo" 2>&1
+        if [ $? -ne 0 ]; then
+            echo "ERROR: Docker build failed — cannot proceed without container" >&2
+            exit 1
+        fi
     fi
 fi
 echo "=== Dependency image ready: ${DEPS_IMAGE} ==="
