@@ -158,10 +158,11 @@ def parse_test_results(output: str, fail_to_pass: list) -> tuple:
 # Docker image resolution
 # ---------------------------------------------------------------------------
 
-def _map_lookup_by_slug(map_path: str, repo_slug: str) -> str | None:
-    """Return the acr_image for repo_slug from a JSONL map file, or None.
+def _map_lookup_by_slug(map_path: str, repo_slug: str) -> dict | None:
+    """Return the full map entry for repo_slug, or None.
 
     *map_path* may be a file or a directory containing ``docker-map.jsonl``.
+    The returned dict has keys: repo_slug, dockerfile_hash, dockerfile_content, acr_image, etc.
     """
     if os.path.isdir(map_path):
         map_path = os.path.join(map_path, "docker-map.jsonl")
@@ -177,7 +178,7 @@ def _map_lookup_by_slug(map_path: str, repo_slug: str) -> str | None:
             except json.JSONDecodeError:
                 continue
             if entry.get("repo_slug") == repo_slug:
-                return entry.get("acr_image")
+                return entry
     return None
 
 
@@ -226,9 +227,13 @@ def resolve_deps_image(
         print(f"         Docker: reusing local image {local_tag}")
         return local_tag
 
-    # 2. Map lookup → pull
+    # 2. Map lookup → pull, or build from map's dockerfile_content
+    map_entry = None
     if map_path:
-        acr_image = _map_lookup_by_slug(map_path, repo_slug)
+        map_entry = _map_lookup_by_slug(map_path, repo_slug)
+
+    if map_entry:
+        acr_image = map_entry.get("acr_image", "")
         if acr_image:
             pull = subprocess.run(
                 ["docker", "pull", acr_image],
@@ -244,19 +249,24 @@ def resolve_deps_image(
             else:
                 print(f"         Docker: pull failed for {acr_image}, will try build")
 
-    # 3. Build from Dockerfile.deps
-    dockerfile = os.path.join(repo_dir, "Dockerfile.deps")
-    if os.path.isfile(dockerfile):
-        print(f"         Docker: building from Dockerfile.deps …")
-        build = subprocess.run(
-            ["docker", "build", "-f", dockerfile, "-t", local_tag, "."],
-            cwd=repo_dir, capture_output=True, text=True, timeout=600,
-        )
-        if build.returncode == 0:
-            print(f"         Docker: built {local_tag}")
-            return local_tag
-        else:
-            print(f"         Docker: build failed, falling back to host")
+        # 3. Build from dockerfile_content stored in map
+        dockerfile_content = map_entry.get("dockerfile_content", "")
+        if dockerfile_content:
+            import tempfile as _tf
+            tmp_dockerfile = os.path.join(repo_dir, "Dockerfile.deps.tmp")
+            with open(tmp_dockerfile, "w", encoding="utf-8") as df:
+                df.write(dockerfile_content)
+            print(f"         Docker: building from map dockerfile_content …")
+            build = subprocess.run(
+                ["docker", "build", "-f", tmp_dockerfile, "-t", local_tag, "."],
+                cwd=repo_dir, capture_output=True, text=True, timeout=600,
+            )
+            os.remove(tmp_dockerfile)
+            if build.returncode == 0:
+                print(f"         Docker: built {local_tag}")
+                return local_tag
+            else:
+                print(f"         Docker: build failed, falling back to host")
 
     return ""
 
@@ -273,6 +283,7 @@ def run_single_case(
     round_num: int,
     deps_image: str = "",
     map_path: str = "",
+    output_dir: str = "",
 ) -> dict:
     """Extract → fix → test → record for one (case, round)."""
     instance_id = case_data["instance_id"]
@@ -361,12 +372,17 @@ def run_single_case(
         env = os.environ.copy()
         env["GITHUB_TOKEN"] = github_token
 
+        # Generate session share file name
+        share_filename = f"{instance_id}_r{round_num}.json"
+        share_path = os.path.join(repo_dir, share_filename)
+
         cp = subprocess.run(
             [
                 "copilot", "-p", prompt,
                 "--allow-all",
                 "--no-ask-user",
                 "--model", model,
+                "--share", share_filename,
             ],
             cwd=repo_dir,
             env=env,
@@ -377,6 +393,13 @@ def run_single_case(
         if cp.returncode != 0:
             result["error"] = f"copilot exit {cp.returncode}: {cp.stderr[:500]}"
             print(f"  WARNING: copilot returned {cp.returncode}")
+
+        # Save session file to output_dir/sessions/
+        if output_dir and os.path.isfile(share_path):
+            sessions_dir = os.path.join(output_dir, "sessions")
+            os.makedirs(sessions_dir, exist_ok=True)
+            shutil.copy2(share_path, os.path.join(sessions_dir, share_filename))
+            print(f"         session → sessions/{share_filename}")
 
         # --- 5. Restore test files ----------------------------------------------
         if hidden_tests:
@@ -582,6 +605,7 @@ def main():
                 case, pair["tar_path"], args.model, token, rnd,
                 deps_image=deps_image,
                 map_path=map_path,
+                output_dir=args.output_dir,
             )
             all_results.append(result)
 
