@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SWE-bench Case Generator</title>
+</head>
+<body>
+
+<!-- ════════ Header ════════ -->
+<div class="header">
+  <div class="header-logo">
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M17.5 3.5L9.5 0L1 3L0 10L3 17.5L9.5 18L17 14L18 7L17.5 3.5Z" fill="white" fill-opacity="0.9"/></svg>
+  </div>
+  <h1>SWE-bench Case Generator</h1>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+    <span id="tokenStatus" style="font-size:11px;display:flex;gap:8px"></span>
+  </div>
+</div>
+
+<!-- ════════ Flow Stepper ════════ -->
+<div class="flow">
+  <div class="fstep active" onclick="window._app.goStep('configure')" id="step-configure">
+    <span class="sn">1</span><span class="sl">Configure</span>
+  </div>
+  <div class="fconn" id="conn-1"></div>
+  <div class="fstep" onclick="window._app.goStep('monitor')" id="step-monitor">
+    <span class="sn">2</span><span class="sl">Monitor</span>
+  </div>
+  <div class="fconn" id="conn-2"></div>
+  <div class="fstep" onclick="window._app.goStep('results')" id="step-results">
+    <span class="sn">3</span><span class="sl">Results</span>
+  </div>
+  <div class="fstep" onclick="window._app.goStep('audit')" id="step-audit">
+    <span class="sn">4</span><span class="sl">Audit</span>
+  </div>
+  <div class="fstep" onclick="window._app.goStep('bugbash')" id="step-bugbash">
+    <span class="sn">5</span><span class="sl">Bug Bash</span>
+  </div>
+  <div class="fstep" onclick="window._app.goStep('dashboard')" id="step-dashboard">
+    <span class="sn">6</span><span class="sl">Dashboard</span>
+  </div>
+</div>
+
+<!-- ════════ Main ════════ -->
+<div class="main">
+
+<!-- ── Panel: Configure ── -->
+<div class="tab-panel active" id="panel-configure">
+
+  <!-- Settings -->
+  <div class="card">
+    <div class="card-head collapsible" onclick="window._app.toggleCollapse(this)">
+      <span class="icon">🔧</span> Azure &amp; Auth Settings
+    </div>
+    <div class="card-body collapsed">
+      <div class="row row-2">
+        <div class="fg"><label>Subscription ID</label><input id="azSub" value="3cfa45ba-9ce3-42fb-9e1a-47374e9dea5b"></div>
+        <div class="fg"><label>Resource Group</label><input id="azRg" value="acv-dp-wu2-p-001-rg"></div>
+      </div>
+      <div class="row row-2">
+        <div class="fg"><label>Data Factory</label><input id="azFactory" value="acv-dp-wu2-p-001-adf"></div>
+        <div class="fg"><label>Pipeline Name</label><input id="azPipeline" value="bug_bash_batch_generate_pipeline"></div>
+      </div>
+      <div class="row row-2" style="margin-top:4px">
+        <div class="fg"><label>Storage Account</label><input id="azStorage" value="genaitextdatawu2"></div>
+        <div class="fg"><label>Blob Container / Output Folder</label>
+          <div style="display:flex;gap:6px">
+            <input id="azContainer" value="code" style="width:80px;flex-shrink:0">
+            <input id="azOutputFolder" value="data_processing_demo/owen/generate-case" style="flex:1">
+          </div>
+        </div>
+      </div>
+      <div class="row row-3" style="margin-top:4px">
+        <div class="fg"><label>Copilot Model</label><input id="azModel" value="claude-opus-4.6"></div>
+        <div class="fg"><label>Timeout (s)</label><input id="azTimeout" type="number" value="600" min="60" max="3600"></div>
+        <div class="fg"><label>GitHub Token</label><input id="azGhToken" type="password" placeholder="ghp_xxx (optional)" autocomplete="new-password" value=""></div>
+      </div>
+      <div class="fg" style="margin-top:4px">
+        <label>Batch Account Endpoint</label><input id="azBatchEndpoint" placeholder="e.g. myaccount.westus2.batch.azure.com">
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:600;color:var(--text-sec);margin-bottom:8px">🔑 Azure Tokens</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-primary" style="padding:7px 16px;font-size:12px" onclick="window._app.refreshTokensViaScript()">🔑 Copy Token Script</button>
+          <button class="btn btn-ghost" style="padding:7px 16px;font-size:12px" onclick="window._app.importTokens()">📋 Import from Clipboard</button>
+          <button class="btn btn-ghost" style="padding:7px 16px;font-size:12px" onclick="window._app.setCorsOnStorage()">🌐 Enable CORS on Storage</button>
+          <button class="btn btn-ghost" style="padding:7px 16px;font-size:12px" onclick="window._app.signOut()">🗑 Clear Tokens</button>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          <b>Step 1:</b> Click <b>"🔑 Copy Token Script"</b> → a PowerShell script is copied to clipboard.<br>
+          <b>Step 2:</b> Paste &amp; run in terminal (requires <code>az login</code> first).<br>
+          <b>Step 3:</b> Click <b>"📋 Import from Clipboard"</b> — tokens are auto-loaded. Tokens expire in ~1 hour.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Add -->
+  <div class="card">
+    <div class="card-head"><span class="icon">📋</span> Quick Add Repos</div>
+    <div class="card-body">
+      <div class="fg">
+        <label>Paste repo URLs (one per line)</label>
+        <textarea id="bulkUrls" rows="3" placeholder="https://github.com/jazzband/prettytable&#10;https://github.com/psf/requests"></textarea>
+      </div>
+      <div class="quick-grid">
+        <div class="fg"><label>Category</label><select id="bulkCat"></select></div>
+        <div class="fg"><label>Difficulty</label><select id="bulkDiff"></select></div>
+        <div class="fg"><label>Cases per repo</label><input id="bulkNum" type="number" value="3" min="1" max="20" style="width:64px"></div>
+        <button class="btn btn-primary" style="height:36px;padding:0 18px" onclick="window._app.bulkAdd()">Add All</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Task Table -->
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">📦</span> Tasks
+      <span id="taskCount" style="margin-left:auto;color:var(--orange);font-size:12px;font-weight:700"></span>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="ttable">
+        <thead><tr>
+          <th class="col-repo">Repository</th>
+          <th class="col-cat">Category</th>
+          <th class="col-diff">Diff</th>
+          <th class="col-num">Cases</th>
+          <th class="col-act"></th>
+        </tr></thead>
+        <tbody id="taskBody"></tbody>
+      </table>
+    </div>
+    <div style="padding:8px 18px"><button class="btn-add-row" onclick="window._app.addRow()">+ Add Row</button></div>
+  </div>
+
+  <!-- Actions -->
+  <div class="btn-bar">
+    <button class="btn btn-primary" onclick="window._app.generate()">Generate Plan</button>
+    <button class="btn btn-purple" id="btnTrigger" onclick="window._app.triggerPipeline()" disabled>Trigger Pipeline</button>
+    <button class="btn btn-ghost" onclick="window._app.resetAll()">Reset</button>
+  </div>
+
+  <!-- Generated Result -->
+  <div class="result-panel" id="resultPanel">
+    <div class="card">
+      <div class="card-head"><span class="icon">📊</span> Generated Plan</div>
+      <div class="card-body" id="resultBody"></div>
+    </div>
+  </div>
+  <div class="status-banner" id="triggerStatus"></div>
+</div>
+
+<!-- ── Panel: Monitor ── -->
+<div class="tab-panel" id="panel-monitor">
+  <!-- Monitor Guide -->
+  <div class="card">
+    <div class="card-head"><span class="icon">🧭</span> Monitor Guide</div>
+    <div class="card-body">
+      <div class="row row-2">
+        <div class="fg" style="margin-bottom:0">
+          <label>Unified Pipeline Runs</label>
+          <div class="hint" style="margin-top:0">All configured pipelines appear in one list with a clear pipeline badge. Use filter and sort controls to focus on generate, audit, or future pipelines. Use <b>Open Batch</b> to jump straight to the Batch Explorer and list all currently running tasks in the selected pool.</div>
+        </div>
+        <div class="fg" style="margin-bottom:0">
+          <label>Batch Explorer</label>
+          <div class="hint" style="margin-top:0">Use this only when you need lower-level Batch jobs, task IDs, stdout, or stderr.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Unified Pipeline Runs -->
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">▶</span>
+      <span style="flex:1">Pipeline Runs</span>
+      <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;margin-right:8px;color:var(--muted)">
+        <input type="checkbox" id="autoRefresh" onchange="window._app.toggleAutoRefresh()"> Auto 15s
+      </label>
+      <button class="btn-sm" onclick="window._app.refreshMonitor()">⟳ Refresh</button>
+    </div>
+    <div class="card-body">
+      <div class="monitor-summary">Configured pipelines: <code id="monitor_generate_PipelineName">bug_bash_batch_generate_pipeline</code>, <code id="monitor_audit_PipelineName">bug_bash_audit_case_pipeline</code>, <code id="monitor_genRubric_PipelineName">gen_rubric</code>, <code id="monitor_autoRunBugbash_PipelineName">auto_run_bugbash</code>. This filter only matches ADF pipeline runs, not Batch job IDs or task IDs.</div>
+      <div class="monitor-toolbar">
+        <select id="monitorPipelineFilter" onchange="window._app.renderCombinedRuns()">
+          <option value="all">All pipelines</option>
+          <option value="generate">Generate only</option>
+          <option value="audit">Audit only</option>
+          <option value="genRubric">Gen Rubric only</option>
+          <option value="autoRunBugbash">Auto Run Bug Bash only</option>
+        </select>
+        <select id="monitorStatusFilter" onchange="window._app.renderCombinedRuns()">
+          <option value="all">All statuses</option>
+          <option value="InProgress">In progress</option>
+          <option value="Queued">Queued</option>
+          <option value="Succeeded">Succeeded</option>
+          <option value="Failed">Failed</option>
+          <option value="Cancelled">Cancelled</option>
+        </select>
+        <select id="monitorSort" onchange="window._app.renderCombinedRuns()">
+          <option value="start-desc">Newest first</option>
+          <option value="start-asc">Oldest first</option>
+          <option value="duration-desc">Longest duration</option>
+          <option value="duration-asc">Shortest duration</option>
+          <option value="pipeline">Pipeline</option>
+          <option value="status">Status</option>
+        </select>
+        <input id="monitorSearch" placeholder="Search ADF run ID or pipeline..." oninput="window._app.renderCombinedRuns()" style="width:220px">
+      </div>
+      <div id="runsContent"><p class="empty">Click Refresh to load pipeline runs</p></div>
+      <div id="activityDetailMonitor"></div>
+    </div>
+  </div>
+
+  <!-- Batch Explorer -->
+  <div class="card batch-section">
+    <div class="card-head">
+      <span class="icon">🔍</span>
+      <span style="flex:1">Batch Explorer</span>
+      <input id="batchPoolFilter" placeholder="Pool ID filter (e.g. test_gen_rubric)" value="test_gen_rubric" style="width:200px;font-size:11px;padding:4px 8px;margin-right:6px">
+      <input id="batchSearch" placeholder="Search Batch task ID or job ID..." style="width:220px;font-size:11px;padding:4px 8px;margin-right:6px" onkeydown="if(event.key==='Enter')window._app.searchBatchExplorer()">
+      <button class="btn-sm" onclick="window._app.searchBatchExplorer()">Search</button>
+      <button class="btn-sm" onclick="window._app.listBatchJobs()">List Jobs</button>
+    </div>
+
+    <div class="card-body">
+      <div class="hint" style="margin-bottom:10px">This view is lower-level than ADF. Use it when you need Batch job state, task IDs, or raw stdout/stderr.</div>
+      <div id="batchLinkStatus" class="linked-hint">Use Open Batch on any pipeline run to list all currently running Batch tasks in the selected pool.</div>
+      <div id="batchJobsContent"><p class="empty">Set Pool ID filter above, then click "List Jobs"</p></div>
+      <div id="batchTasksDetail"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Panel: Results ── -->
+<div class="tab-panel" id="panel-results">
+  <div class="qe-sub-tabs">
+    <button class="qe-sub-tab active" onclick="window._app.switchResultsTab('blobs')">📄 Blob Output</button>
+    <button class="qe-sub-tab" onclick="window._app.switchResultsTab('quality')">📊 Quality Evaluation</button>
+  </div>
+  <div id="resultsSubBlobs">
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">📄</span>
+      <span style="flex:1">Blob Storage Output</span>
+      <select id="blobSubfolder" style="width:auto;font-size:12px;padding:4px 8px;margin-right:8px">
+        <option value="jsonl">jsonl/</option>
+        <option value="tar.gz">tar.gz/</option>
+      </select>
+      <button class="btn-sm" onclick="window._app.refreshBlobs()">Load Files</button>
+    </div>
+    <div class="card-body">
+      <div id="blobContent"><p class="empty">Click "Load Files" to list output files from blob storage</p></div>
+      <div id="blobPreview"></div>
+    </div>
+  </div>
+  </div>
+  <div id="resultsSubQuality" style="display:none">
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">📊</span>
+      <span style="flex:1">Quality Evaluation</span>
+      <button class="btn-sm" onclick="window._app.loadQualityEvaluation()">Load Data</button>
+    </div>
+    <div class="card-body">
+      <div id="qualityEvalContent"><p class="empty">Click "Load Data" to analyze case quality</p></div>
+    </div>
+  </div>
+  </div>
+</div>
+
+<!-- ── Panel: Audit ── -->
+<div class="tab-panel" id="panel-audit">
+
+  <!-- Case Selection -->
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">📋</span>
+      <span style="flex:1">Select Cases to Audit</span>
+      <button class="btn-sm" onclick="window._app.loadAuditCases()">Load from Blob</button>
+    </div>
+    <div class="card-body">
+      <div id="auditCasesContent"><p class="empty">Click "Load from Blob" to list generated JSONL files</p></div>
+    </div>
+  </div>
+
+  <!-- Audit Config -->
+  <div class="card">
+    <div class="card-head"><span class="icon">⚙</span> Audit Configuration</div>
+    <div class="card-body">
+      <div class="row row-3">
+        <div class="fg">
+          <label>Quick Audit (in-browser)</label>
+          <div class="hint" style="margin-top:0">Runs L1 (JSON schema), L5 (patch-issue coherence), L6 (label reasonableness) directly in the browser — no pipeline needed.</div>
+        </div>
+        <div class="fg">
+          <label>Full Audit (pipeline)</label>
+          <div class="hint" style="margin-top:0">Runs L1-L7 on Azure Batch, including L2 (snapshot integrity), L3 (patch apply), L4 (FAIL→PASS), L7 (anti-cheat).</div>
+        </div>
+        <div class="fg">
+          <label>Audit Level (pipeline only)</label>
+          <select id="auditLevel">
+            <option value="L7">L7 — All checks (recommended)</option>
+            <option value="L4">L4 — Up to FAIL→PASS</option>
+            <option value="L3">L3 — Up to Patch Apply</option>
+            <option value="L1">L1 — Schema only</option>
+          </select>
+        </div>
+      </div>
+      <div class="row row-2" style="margin-top:4px">
+        <div class="fg">
+          <label>Audit Pipeline Name</label>
+          <input id="auditPipelineName" value="bug_bash_audit_case_pipeline">
+        </div>
+        <div class="fg">
+          <label>Audit Output Folder</label>
+          <input id="auditOutputFolder" value="data_processing_demo/owen/generate-case/audit">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="btn-bar">
+    <button class="btn btn-primary" onclick="window._app.runQuickAudit()">🔍 Quick Audit (L1/L5/L6)</button>
+    <button class="btn btn-purple" onclick="window._app.triggerAuditPipeline()">🚀 Full Audit Pipeline (L1-L7)</button>
+  </div>
+
+  <!-- Quick Audit Results -->
+  <div id="quickAuditResults" style="margin-top:16px"></div>
+
+  <!-- Pipeline Audit Results -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-head">
+      <span class="icon">📊</span>
+      <span style="flex:1">Audit Results (from Blob)</span>
+      <button class="btn-sm" onclick="window._app.loadAuditResults()">Load Results</button>
+    </div>
+    <div class="card-body">
+      <div id="auditResultsContent"><p class="empty">Run an audit first, then click "Load Results"</p></div>
+      <div id="auditResultPreview"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Panel: Bug Bash ── -->
+<div class="tab-panel" id="panel-bugbash">
+
+  <!-- Case Selection -->
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">🐛</span>
+      <span style="flex:1">Select Generated Cases</span>
+      <button class="btn-sm" onclick="window._app.loadBugBashCases()">Load from Blob</button>
+    </div>
+    <div class="card-body">
+      <div id="bbCasesContent"><p class="empty">Click "Load from Blob" to list generated JSONL files and match tar.gz snapshots</p></div>
+    </div>
+  </div>
+
+  <!-- Pipeline Config -->
+  <div class="card">
+    <div class="card-head"><span class="icon">⚙</span> Pipeline Configuration</div>
+    <div class="card-body">
+      <div class="row row-2">
+        <div class="fg"><label>Gen Rubric Pipeline</label><input id="bbGenRubricPipeline" value="gen_rubric"></div>
+        <div class="fg"><label>Auto Run Bug Bash Pipeline</label><input id="bbAutoRunPipeline" value="auto_run_bugbash"></div>
+      </div>
+      <div class="row row-2" style="margin-top:4px">
+        <div class="fg"><label>Rubric Output Folder</label><input id="bbRubricOutputFolder" value="data_processing_demo/owen/generate-case/rubric"></div>
+        <div class="fg"><label>Bug Bash Output Folder</label><input id="bbBugBashOutputFolder" value="data_processing_demo/owen/generate-case/bugbash"></div>
+      </div>
+      <div class="fg" style="margin-top:4px">
+        <label>Prompts Output Folder (MD files)</label><input id="bbPromptsFolder" value="data_processing_demo/owen/generate-case/prompts" placeholder="e.g. data_processing_demo/owen/generate-case/prompts">
+      </div>
+      <div class="fg" style="margin-top:8px">
+        <label>Auto-trigger auto_run_bugbash after gen_rubric completes</label>
+        <label style="font-weight:400;display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="bbAutoTrigger" checked> Automatically trigger next pipeline on success
+        </label>
+      </div>
+      <div class="btn-bar" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+        <button class="btn btn-ghost" onclick="window._app.loadPipelineDefinition('bbGenRubricPipeline')">🔍 Load gen_rubric Definition</button>
+        <button class="btn btn-ghost" onclick="window._app.loadPipelineDefinition('bbAutoRunPipeline')">🔍 Load auto_run_bugbash Definition</button>
+      </div>
+      <div id="bbPipelineDefContent" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="btn-bar">
+    <button class="btn btn-primary" id="btnGenRubric" onclick="window._app.triggerBugBashGenRubric()">🚀 Step 1: Preview &amp; Trigger Gen Rubric</button>
+    <button class="btn btn-purple" id="btnAutoRun" onclick="window._app.triggerBugBashAutoRun()" disabled>🔄 Step 2: Trigger Auto Run Bug Bash</button>
+    <button class="btn btn-ghost" onclick="window._app.exportPromptsAsMd()">📄 Export Prompts as MD</button>
+    <button class="btn btn-ghost" onclick="window._app.resetBugBash()">Reset</button>
+  </div>
+
+  <!-- Progress -->
+  <div id="bbProgress" style="margin-top:16px"></div>
+
+  <!-- Pipeline Status -->
+  <div id="bbPipelineStatus" style="margin-top:16px"></div>
+
+</div>
+
+<!-- ── Panel: Dashboard ── -->
+<div class="tab-panel" id="panel-dashboard">
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">📊</span>
+      <span style="flex:1">Data Analytics Dashboard</span>
+      <button class="btn-sm" onclick="window._app.loadDashboard()">🔄 Refresh</button>
+    </div>
+    <div class="card-body">
+      <div id="dashboardContent"><p class="empty">Click <b>Refresh</b> to load JSONL data and generate analytics</p></div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /main -->
+
+<!-- ════════ Log Viewer Modal ════════ -->
+<div class="modal-overlay" id="logModal" onclick="if(event.target===this)window._app.closeModal()">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-title" id="logModalTitle">Log Viewer</span>
+      <button class="btn-sm" id="modalRefreshBtn" style="display:none" onclick="window._app.refreshModal()">🔄 Refresh</button>
+      <button class="btn-copy" onclick="window._app.copyModalContent()">📋 Copy</button>
+      <button class="modal-close" onclick="window._app.closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <pre id="logModalContent">Loading…</pre>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
