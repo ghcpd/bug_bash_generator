@@ -7,3 +7,6 @@ build/
 .eggs/
 .tox/
 *.tmp
+.agents/
+trigger_config.jsonl
+trigger_pipeline.ps1

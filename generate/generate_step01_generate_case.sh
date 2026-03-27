@@ -96,7 +96,16 @@ mkdir -p "$TARGZ_DIR" "$JSONL_DIR" "$METRICS_DIR"
 
 # ── Temporary workspace ──────────────────────────────────────────────────────
 WORK_DIR=$(mktemp -d)
-trap 'rm -rf "$WORK_DIR"' EXIT
+cleanup() {
+    # Docker runs as root → .pytest_cache / __pycache__ are root-owned.
+    # Use a container to remove them before host-side rm.
+    if [ -n "${DEPS_IMAGE:-}" ] && command -v docker &>/dev/null; then
+        docker run --rm -v "$WORK_DIR:$WORK_DIR" -w "$WORK_DIR" "${DEPS_IMAGE}" \
+            find "$WORK_DIR" -mindepth 1 -delete 2>/dev/null || true
+    fi
+    rm -rf "$WORK_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 now_ms() {
     python3 -c 'import time; print(int(time.time() * 1000))'
@@ -316,10 +325,8 @@ fi
 # Install dependencies (runtime + test) — Docker image
 # Resolution order:
 #   1. DEPS_IMAGE_OVERRIDE env var (explicit image override)
-#   2. Local Docker image exists for this repo → reuse directly (no map)
-#   3. JSONL map lookup (same repo + same Dockerfile hash → pull ACR image)
-#   4. Generate Dockerfile, build locally, register ACR image in map
-DOCKER_MAP="${DOCKER_MAP:-${OUTPUT_BASE}/map/docker-map.jsonl}"
+#   2. Local Docker image exists for this repo → reuse directly
+#   3. Generate Dockerfile, build locally
 LOCAL_IMAGE_TAG="bugbash-deps-${REPO_SLUG,,}"
 
 if [ -n "${DEPS_IMAGE_OVERRIDE:-}" ]; then
@@ -330,54 +337,44 @@ if [ -n "${DEPS_IMAGE_OVERRIDE:-}" ]; then
         echo "ERROR: Failed to pull image ${DEPS_IMAGE}" >&2
         exit 1
     fi
-elif docker image inspect "$LOCAL_IMAGE_TAG" &>/dev/null; then
-    # Local image already built (e.g. by a previous case for the same repo)
-    DEPS_IMAGE="$LOCAL_IMAGE_TAG"
-    echo "=== Reusing local image: ${DEPS_IMAGE} ==="
 else
+    # Always remove old image and rebuild to pick up Dockerfile changes
+    docker rmi "$LOCAL_IMAGE_TAG" 2>/dev/null || true
+
     echo "=== Generating dependency Dockerfile ==="
     DEPS_DOCKERFILE="$WORK_DIR/repo/Dockerfile.deps"
 
-    # Check map for an ACR image with matching Dockerfile hash
-    CACHED_IMAGE=$($PY "$SCRIPT_DIR/generate_deps_dockerfile.py" \
+    $PY "$SCRIPT_DIR/generate_deps_dockerfile.py" \
         --repo-dir "$WORK_DIR/repo" \
-        --python "$PY" \
-        --map "$DOCKER_MAP" \
-        --repo-slug "$REPO_SLUG" 2>/dev/null) || true
+        --output "$DEPS_DOCKERFILE"
 
-    if [ -n "$CACHED_IMAGE" ] && docker pull "$CACHED_IMAGE" 2>&1; then
-        # Tag it locally so future cases skip the pull
-        docker tag "$CACHED_IMAGE" "$LOCAL_IMAGE_TAG" 2>/dev/null || true
-        DEPS_IMAGE="$LOCAL_IMAGE_TAG"
-        echo "=== Map hit: pulled ${CACHED_IMAGE}, tagged as ${DEPS_IMAGE} ==="
-    else
-        # No hit → generate Dockerfile and build
-        $PY "$SCRIPT_DIR/generate_deps_dockerfile.py" \
-            --repo-dir "$WORK_DIR/repo" \
-            --python "$PY" \
-            --output "$DEPS_DOCKERFILE" \
-            --map "$DOCKER_MAP" \
-            --repo-slug "$REPO_SLUG"
-
-        DEPS_IMAGE="$LOCAL_IMAGE_TAG"
-        echo "=== Building dependency image: ${DEPS_IMAGE} ==="
-        docker build -f "$DEPS_DOCKERFILE" -t "$DEPS_IMAGE" "$WORK_DIR/repo" 2>&1
-        if [ $? -ne 0 ]; then
-            echo "ERROR: Docker build failed — cannot proceed without container" >&2
-            exit 1
-        fi
+    DEPS_IMAGE="$LOCAL_IMAGE_TAG"
+    echo "=== Building dependency image: ${DEPS_IMAGE} ==="
+    docker build -f "$DEPS_DOCKERFILE" -t "$DEPS_IMAGE" "$WORK_DIR/repo" 2>&1
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Docker build failed — cannot proceed without container" >&2
+        exit 1
     fi
 fi
 echo "=== Dependency image ready: ${DEPS_IMAGE} ==="
 
-# Helper: run commands inside the deps container with the work dir mounted
-docker_run() {
-    docker run --rm \
-        -v "$WORK_DIR:$WORK_DIR" \
-        -w "$WORK_DIR/repo" \
-        "$DEPS_IMAGE" \
-        "$@"
-}
+# Python binary inside the Docker container (always python3, regardless of host $PY)
+CONTAINER_PY="python3"
+
+# Helper: inline docker run with repo mounted at /repo (matching the editable install path in the image)
+# Usage: docker run --rm -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" <cmd>
+
+# ── Re-install editable package into the mounted volume ──────────────────────
+# The Docker image built _version.py (setuptools_scm etc.) inside its own /repo,
+# but we mount $WORK_DIR/repo over /repo at runtime, losing those generated files.
+# Run a one-time editable install so generated files land on the host volume.
+echo "=== Re-installing editable package into mounted volume ==="
+docker run --rm \
+    -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" \
+    bash -c "$CONTAINER_PY -m pip install -e . --no-deps 2>/dev/null \
+        || SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 $CONTAINER_PY -m pip install -e . --no-deps 2>/dev/null \
+        || true" \
+    > /dev/null 2>&1
 echo "=== Test dependency installation complete ==="
 
 # ── Baseline: require original tests and verify clean pass-to-pass baseline ──
@@ -408,9 +405,10 @@ if [ "$NATIVE_TESTS_ENABLED" = "1" ]; then
     else
         echo "=== Baseline: verifying native tests on clean repo ==="
     BASELINE_EXIT=0
-    timeout "$NATIVE_TEST_TIMEOUT" docker_run \
-        "$PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BASELINE_JSON" \
-        -q --rootdir "$WORK_DIR/repo" -o addopts= \
+    timeout "$NATIVE_TEST_TIMEOUT" docker run --rm \
+        -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" \
+        "$CONTAINER_PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BASELINE_JSON" \
+        -q --rootdir /repo -o addopts= \
         > "$NATIVE_BASELINE_LOG" 2>&1 || BASELINE_EXIT=$?
 
     NATIVE_BASELINE_COUNT=$(python3 -c "
@@ -460,7 +458,7 @@ echo "================================================================"
 # Reset repo to clean state before each attempt
 cd "$WORK_DIR/repo"
 git checkout -- . 2>/dev/null || true
-git clean -fd 2>/dev/null || true
+git clean -fd -e Dockerfile.deps 2>/dev/null || true
 rm -f "test_synthetic_${CASE_INDEX}.py"
 
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
@@ -507,17 +505,17 @@ The repository is already cloned at the current working directory.
 A Docker image \`${DEPS_IMAGE}\` has been pre-built with all runtime and test dependencies installed.
 **ALL shell commands that execute project code or run tests MUST run inside this container:**
 \`\`\`
-docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} <command>
+docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} <command>
 \`\`\`
 Examples:
-- Run tests: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest -x --timeout=60\`
-- Run a Python script: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY script.py\`
+- Run tests: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest -x --timeout=60\`
+- Run a Python script: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 script.py\`
 
 You may still use \`cat\`, \`git\`, \`ls\`, \`find\` etc. directly on the host for reading files.
 **Do NOT \`pip install\` on the host** — the container already has everything.
 
 ### Step 3: Run Existing Tests
-- Run: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest -x --timeout=60\`
+- Run: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest -x --timeout=60\`
 - If ALL existing tests pass: go back to Step 2 for the next feature (up to 3 features total)
 - If ANY existing test fails: move to Step 4
 - If you completed all 3 features and all tests still pass: output FEATURES_COMPLETE and stop
@@ -525,24 +523,25 @@ You may still use \`cat\`, \`git\`, \`ls\`, \`find\` etc. directly on the host f
 ### Step 4: Extract Minimal Reproducer
 - Examine which existing test(s) failed — understand input, expected output, and actual output
 - Create \`test_synthetic_${CASE_INDEX}.py\` in the repo root
-- Extract 2-3 minimal, independent test functions that reproduce the observed failure
+- Write minimal, independent test functions that reproduce the observed failures — one per distinct failure mode
+- The number of tests doesn't matter — write as many as needed to cover all the broken behavior
 - Tests must be deterministic — NO \`time.time()\` with tight thresholds
 - Test observable behavior, not source code content
 
 ### Step 5: Verify FAIL
-- Run: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
+- Run: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
 - Confirm the synthetic tests FAIL on the current code
 - If tests PASS, your reproducer is wrong — revise it
 
 ### Step 6: Verify PASS
 - Revert all changes: \`git checkout -- .\`
-- Run: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
+- Run: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
 - Confirm the synthetic tests PASS on the original code
 - If tests FAIL, your reproducer is wrong — revise it
 
 ### Step 7: Restore modified state
 - Re-apply your changes so the repo ends in the modified state
-- Verify: \`docker run --rm -v ${WORK_DIR}:${WORK_DIR} -w ${WORK_DIR}/repo ${DEPS_IMAGE} $PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs\` should FAIL again
+- Verify: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest test_synthetic_${CASE_INDEX}.py -xvs\` should FAIL again
 
 ### Step 8: Review actual diff and write issue_text (CRITICAL — do this LAST)
 - Run: \`git diff -- '*.py' ':!test_synthetic_*'\`
@@ -574,7 +573,7 @@ CASE_START
   "base_commit": "${BASE_COMMIT}",
   "source": "synthetic_mutation",
   "setup_command": "<actual shell command to install this project>",
-  "test_command": "$PY -m pytest test_synthetic_${CASE_INDEX}.py -xvs",
+  "test_command": "python3 -m pytest test_synthetic_${CASE_INDEX}.py -xvs",
   "issue_text": "<markdown bug report describing the SYMPTOM only>",
   "hints_text": "",
   "test_filename": "test_synthetic_${CASE_INDEX}.py",
@@ -770,7 +769,7 @@ if not m:
         'base_commit': base_commit,
         'source': 'synthetic_mutation',
         'setup_command': 'pip install -e .',
-        'test_command': f'\$PY -m pytest {test_filename} -xvs',
+        'test_command': f'python3 -m pytest {test_filename} -xvs',
         'issue_text': f'Tests in {test_filename} are failing. The functions {\", \".join(test_funcs[:3])} report unexpected behavior.',
         'hints_text': '',
         'test_filename': test_filename,
@@ -813,8 +812,9 @@ cd "$WORK_DIR/repo"
 # Step A: Tests must FAIL on buggy code (current state)
 echo "--- Verifying tests FAIL on buggy code ---"
 FAIL_EXIT=0
-timeout "$VERIFY_TIMEOUT" docker_run \
-    $PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
+timeout "$VERIFY_TIMEOUT" docker run --rm \
+    -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" \
+    $CONTAINER_PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
     > "$WORK_DIR/verify_fail.txt" 2>&1 || FAIL_EXIT=$?
 tail -20 "$WORK_DIR/verify_fail.txt"
 
@@ -835,11 +835,12 @@ echo "--- FAIL check passed (exit=$FAIL_EXIT) ---"
 # Step B: Revert to clean state, tests must PASS
 echo "--- Verifying tests PASS on clean code ---"
 git checkout HEAD -- . 2>/dev/null || true
-git clean -fd -e "test_synthetic_*.py" 2>/dev/null || true
+git clean -fd -e "test_synthetic_*.py" -e Dockerfile.deps 2>/dev/null || true
 
 PASS_EXIT=0
-timeout "$VERIFY_TIMEOUT" docker_run \
-    $PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
+timeout "$VERIFY_TIMEOUT" docker run --rm \
+    -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" \
+    $CONTAINER_PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
     > "$WORK_DIR/verify_pass.txt" 2>&1 || PASS_EXIT=$?
 tail -20 "$WORK_DIR/verify_pass.txt"
 
@@ -863,9 +864,10 @@ if [ "$NATIVE_BASELINE_CONFIRMED" = "true" ]; then
     NATIVE_BUGGY_JSON="$WORK_DIR/native_tests_buggy_attempt_${ATTEMPT}.json"
     NATIVE_BUGGY_LOG="$WORK_DIR/native_tests_buggy_attempt_${ATTEMPT}.log"
     NATIVE_BUGGY_EXIT=0
-    timeout "$NATIVE_TEST_TIMEOUT" docker_run \
-        "$PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BUGGY_JSON" \
-        -q --rootdir "$WORK_DIR/repo" -o addopts= \
+    timeout "$NATIVE_TEST_TIMEOUT" docker run --rm \
+        -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" \
+        "$CONTAINER_PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BUGGY_JSON" \
+        -q --rootdir /repo -o addopts= \
         > "$NATIVE_BUGGY_LOG" 2>&1 || NATIVE_BUGGY_EXIT=$?
 
     if [ "$NATIVE_BUGGY_EXIT" -eq 124 ]; then

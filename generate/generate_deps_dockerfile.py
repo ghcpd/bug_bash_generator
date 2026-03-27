@@ -44,7 +44,7 @@ def _find_requirements_files(repo: Path) -> list[str]:
         for f in sorted(files):
             if re.match(r"requirements.*\.txt$", f):
                 rel = os.path.relpath(os.path.join(root, f), repo)
-                if not rel.startswith(("build/", ".tox/")):
+                if not rel.startswith(("build/", ".tox/", "examples/", "example/", "docs/", "benchmarks/")):
                     hits.append(rel)
     return sorted(set(hits))
 
@@ -141,8 +141,8 @@ def _parse_setup_py_extras(repo: Path) -> list[str]:
 # Python version detection
 # ---------------------------------------------------------------------------
 
-# Supported slim image tags, newest first
-_SUPPORTED_VERSIONS = ["3.13", "3.12", "3.11", "3.10", "3.9", "3.8"]
+# Supported slim image tags, lowest first (pick minimum compatible version for max stability)
+_SUPPORTED_VERSIONS = ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
 _DEFAULT_VERSION = "3.11"
 
 
@@ -275,6 +275,64 @@ def _ver_tuple(v: str) -> tuple[int, ...]:
 
 
 # ---------------------------------------------------------------------------
+# Project name detection (to avoid PyPI self-install)
+# ---------------------------------------------------------------------------
+
+def _detect_project_name(repo: Path) -> str | None:
+    """Best-effort detection of the project's own package name.
+
+    Used to filter it out of requirements.txt / tox deps / dependency-groups
+    so we don't accidentally install from PyPI and override the editable install.
+    """
+    # 1. pyproject.toml [project] name
+    if tomllib is not None:
+        pp = repo / "pyproject.toml"
+        if pp.exists():
+            try:
+                data = tomllib.loads(pp.read_text(encoding="utf-8"))
+                name = data.get("project", {}).get("name", "")
+                if name:
+                    return name.lower().replace("-", "_")
+            except Exception:
+                pass
+
+    # 2. setup.cfg [metadata] name
+    setup_cfg = repo / "setup.cfg"
+    if setup_cfg.exists():
+        cfg = configparser.ConfigParser()
+        try:
+            cfg.read(str(setup_cfg), encoding="utf-8")
+            name = cfg.get("metadata", "name", fallback="")
+            if name:
+                return name.lower().replace("-", "_")
+        except Exception:
+            pass
+
+    # 3. setup.py — extract from name= kwarg
+    sp = repo / "setup.py"
+    if sp.exists():
+        try:
+            text = sp.read_text(encoding="utf-8", errors="ignore")
+            m = re.search(r'name\s*=\s*["\']([^"\']+)["\']', text)
+            if m:
+                return m.group(1).lower().replace("-", "_")
+        except Exception:
+            pass
+
+    return None
+
+
+def _is_self_package(dep_spec: str, project_name: str | None) -> bool:
+    """Return True if *dep_spec* refers to the project's own package."""
+    if not project_name:
+        return False
+    # Normalise: "prettytable>=3.0" → "prettytable"
+    raw = re.split(r"[\[><=!;@\s]", dep_spec.strip())[0]
+    normalised = raw.lower().replace("-", "_")
+    return normalised == project_name
+
+
+# ---------------------------------------------------------------------------
 # Dockerfile generation
 # ---------------------------------------------------------------------------
 
@@ -293,6 +351,8 @@ def generate_dockerfile(
     has_tox = (repo / "tox.ini").exists()
 
     python_version = _detect_python_version(repo)
+
+    project_name = _detect_project_name(repo)
 
     optional_groups = _parse_pyproject_optional_groups(repo)
     dep_group_pkgs = _parse_pyproject_dep_groups(repo)
@@ -402,7 +462,7 @@ def generate_dockerfile(
         lines.append("")
 
     # -- Re-install project editable (ensure local dev version wins)
-    lines.append("# Re-install project (editable, --no-deps) to ensure local version wins")
+    lines.append("# Editable install (no deps) — import resolves to /repo source")
     lines.append(f"RUN {PY} -m pip install -e . --no-deps 2>/dev/null \\")
     lines.append(f"    || SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 {PY} -m pip install -e . --no-deps 2>/dev/null \\")
     lines.append("    || true")

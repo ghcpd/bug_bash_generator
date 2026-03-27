@@ -82,6 +82,16 @@ def create_snapshot(repo_dir: str, case: dict, snapshot_dir: str) -> None:
         with open(test_path, "w", encoding="utf-8") as f:
             f.write(test_code)
 
+    # Copy Dockerfile.deps → Dockerfile at snapshot root for easy reuse
+    deps_dockerfile = os.path.join(repo_dir, "Dockerfile.deps")
+    snapshot_dockerfile = os.path.join(snapshot_dir, "Dockerfile")
+    if os.path.isfile(deps_dockerfile):
+        shutil.copy2(deps_dockerfile, snapshot_dockerfile)
+    # Also remove the original Dockerfile.deps from snapshot (avoid duplicates)
+    snapshot_deps_dockerfile = os.path.join(snapshot_dir, "Dockerfile.deps")
+    if os.path.isfile(snapshot_deps_dockerfile) and os.path.isfile(snapshot_dockerfile):
+        os.remove(snapshot_deps_dockerfile)
+
     # Write .github/copilot-instructions.md with build/test commands
     setup_cmd = case.get("setup_command", "pip install -e .")
     test_cmd = case.get("test_command", f"python -m pytest {test_filename} -xvs")
