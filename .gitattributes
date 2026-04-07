@@ -1,0 +1,12 @@
+# Force LF line endings for all shell scripts and Python files
+# These run on Linux (Azure Batch) and CRLF breaks bash/python shebangs
+*.sh text eol=lf
+*.py text eol=lf
+*.ts text eol=lf
+*.js text eol=lf
+*.md text eol=lf
+*.jsonl text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+Dockerfile text eol=lf
