@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run_and_verify.py — Automated copilot-cli bug fix verification pipeline.
+evaluate_difficulty.py — Automated copilot-cli bug fix verification pipeline.
 
 For each matching (tar.gz, jsonl) pair:
   1. Extract tar.gz to a working directory
@@ -14,7 +14,7 @@ For each matching (tar.gz, jsonl) pair:
   9. Repeat for N rounds
 
 Usage:
-  python3 verification_for_filter.py \
+  python3 evaluate_difficulty.py \
     --tar-dir  /path/to/tar.gz/ \
     --jsonl-dir /path/to/jsonl/ \
     --output-dir /path/to/results/ \
