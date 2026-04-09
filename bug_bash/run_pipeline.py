@@ -394,7 +394,8 @@ def _run_copilot_once(cmd: list, model: str, cwd: str,
 
 def call_copilot(prompt: str, model: str, local_repo_dir: str,
                  github_token: str = None,
-                 share_path: str = None) -> str:
+                 share_path: str = None,
+                 log_dir: str = None) -> str:
     """Write prompt to temp file, invoke copilot-cli, return output."""
     prompt_file = os.path.join(
         tempfile.gettempdir(), f"prompt_{uuid.uuid4().hex[:8]}.txt",
@@ -415,6 +416,9 @@ def call_copilot(prompt: str, model: str, local_repo_dir: str,
         "--add-dir", local_repo_dir,
         "--add-dir", "/tmp",
     ]
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+        cmd.extend(["--log-dir", log_dir, "--log-level", "debug"])
     if share_path:
         cmd.extend(["--share", share_path])
 
@@ -475,27 +479,35 @@ def extract_patch(local_repo_dir: str) -> str:
 # Artifact collection
 # ─────────────────────────────────────────────────────────
 def collect_artifacts(local_repo_dir: str, model: str,
-                      share_path: str = None) -> dict[str, str]:
+                      share_path: str = None,
+                      log_dir: str = None) -> dict[str, str]:
     """Collect copilot artifacts. Returns {filename: source_path}."""
     artifacts: dict[str, str] = {}
 
-    # Track log (copilot debug output)
-    for pattern, target in [("process-*.jsonl", "track.jsonl"),
-                            ("process-*.log", "track.log")]:
-        matches = sorted(
-            pathlib.Path(local_repo_dir).glob(pattern),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if matches:
-            artifacts[target] = str(matches[0])
-            break
+    # Search both repo dir and log_dir for copilot debug logs
+    search_dirs = [local_repo_dir]
+    if log_dir and os.path.isdir(log_dir):
+        search_dirs.append(log_dir)
 
-    # Check if track.jsonl/log already exists
-    for name in ("track.jsonl", "track.log"):
-        p = os.path.join(local_repo_dir, name)
-        if os.path.isfile(p) and name not in artifacts:
-            artifacts[name] = p
+    for search_dir in search_dirs:
+        for pattern, target in [("process-*.log", "track.log"),
+                                ("process-*.jsonl", "track.jsonl")]:
+            if target in artifacts:
+                continue
+            matches = sorted(
+                pathlib.Path(search_dir).glob(pattern),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if matches:
+                artifacts[target] = str(matches[0])
+
+    # Check if track.log already exists
+    for name in ("track.log", "track.jsonl"):
+        for d in search_dirs:
+            p = os.path.join(d, name)
+            if os.path.isfile(p) and name not in artifacts:
+                artifacts[name] = p
 
     # Share file (session transcript)
     if share_path and os.path.isfile(share_path):
@@ -553,10 +565,14 @@ def run_model_worker(
         # Share file path
         share_path = os.path.join(local_repo, f"{safe_model}.txt")
 
+        # Copilot log directory (inside output dir for persistence)
+        copilot_log_dir = os.path.join(model_out, "copilot_logs") if model_out else None
+
         # Call copilot-cli
         log(model, "Invoking copilot-cli...")
         copilot_output = call_copilot(
-            prompt, model, local_repo, github_token, share_path)
+            prompt, model, local_repo, github_token, share_path,
+            log_dir=copilot_log_dir)
         if copilot_output:
             log(model, f"Output tail: {copilot_output[-300:]}")
 
@@ -566,7 +582,8 @@ def run_model_worker(
             f"{patch.count(chr(10))} lines")
 
         # Collect artifacts
-        artifacts = collect_artifacts(local_repo, model, share_path)
+        artifacts = collect_artifacts(
+            local_repo, model, share_path, log_dir=copilot_log_dir)
         log(model, f"Artifacts: {list(artifacts.keys())}")
 
         # Save to output directory
@@ -807,9 +824,10 @@ def push_results(
 def run_pipeline(
     jsonl_file: str,
     images_dir: str,
-    repos_dir: str,
-    models: list[str],
+    repos_dir: str = None,
+    models: list[str] = None,
     output_dir: str = None,
+    base_dir: str = None,
     workers: int = None,
     github_token: str = None,
     prompt_version: str = "v2",
@@ -839,6 +857,18 @@ def run_pipeline(
     repo = data.get("repo", "")
     logging.info(f"  Case:    {instance_id}")
     logging.info(f"  Repo:    {repo}")
+
+    # ── Derive paths from --base-dir if provided ──
+    if base_dir:
+        if not repos_dir:
+            repos_dir = os.path.join(base_dir, "tar.gz")
+        if not output_dir:
+            output_dir = os.path.join(base_dir, "evaluation")
+        logging.info(f"  Base:    {base_dir}")
+
+    if not repos_dir:
+        logging.error("--repos-dir or --base-dir is required")
+        sys.exit(1)
 
     # ── Resolve paths ──
     image_tar = os.path.join(images_dir, repo, "deps.tar")
@@ -911,18 +941,38 @@ def run_pipeline(
     logging.info("  Verifying patches...")
     logging.info(f"{'=' * 60}")
 
-    eval_jsonl_dir = os.path.join(out_dir, instance_id, "eval")
-    os.makedirs(eval_jsonl_dir, exist_ok=True)
-
     for model in models:
         r = results.get(model, {})
         patch = r.get("patch", "")
         safe_model = model.replace("/", "_").replace(":", "_").replace(" ", "-")
+        model_eval_dir = os.path.join(out_dir, instance_id, safe_model)
+        os.makedirs(model_eval_dir, exist_ok=True)
 
         if not patch:
             log(model, "No patch — skipping verification")
             r["test_passed"] = False
             r["verification"] = {"error": "no patch produced"}
+            # Write evaluation.jsonl even for failures
+            eval_record = {
+                "instance_id": instance_id,
+                "model": model,
+                "repo": data.get("repo", ""),
+                "batch_version": data.get("batch_version", ""),
+                "resolved": [],
+                "unresolved": data.get("fail_to_pass", []),
+                "still_passing": [],
+                "regressed": [],
+                "test_passed": False,
+                "patch_size": 0,
+                "labels": data.get("labels", {}),
+                "generated_at": r.get("generated_at", ""),
+                "verified_at": datetime.now(timezone.utc).isoformat(),
+                "error": "no patch produced",
+            }
+            eval_path = os.path.join(model_eval_dir, "evaluation.jsonl")
+            with open(eval_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(eval_record, ensure_ascii=False) + "\n")
+            log(model, f"evaluation.jsonl → {eval_path}")
             continue
 
         log(model, "Verifying patch...")
@@ -948,7 +998,7 @@ def run_pipeline(
             r["test_passed"] = False
             r["verification"] = {"error": str(e)}
 
-        # Write per-model evaluation JSONL
+        # Write evaluation.jsonl to per-model eval directory
         eval_record = {
             "instance_id": instance_id,
             "model": model,
@@ -965,10 +1015,10 @@ def run_pipeline(
             "verified_at": datetime.now(timezone.utc).isoformat(),
             "error": r.get("error"),
         }
-        eval_path = os.path.join(eval_jsonl_dir, f"{safe_model}.eval.jsonl")
+        eval_path = os.path.join(model_eval_dir, "evaluation.jsonl")
         with open(eval_path, "w", encoding="utf-8") as f:
             f.write(json.dumps(eval_record, ensure_ascii=False) + "\n")
-        log(model, f"Eval JSONL → {eval_path}")
+        log(model, f"evaluation.jsonl → {eval_path}")
 
     # ── Step 4: Push if requested ──
     if push and token:
@@ -1023,14 +1073,19 @@ def main():
         "--images-dir", required=True,
         help="Docker images directory (contains owner/repo/deps.tar)")
     parser.add_argument(
-        "--repos-dir", required=True,
-        help="Repo archives directory (contains workspace_dir.tar.gz)")
+        "--base-dir", default=None,
+        help="Base directory ($BASE). Derives --repos-dir as $BASE/tar.gz "
+             "and evaluation output as $BASE/evaluation/")
+    parser.add_argument(
+        "--repos-dir", default=None,
+        help="Repo archives directory (contains workspace_dir.tar.gz). "
+             "Not needed if --base-dir is set.")
     parser.add_argument(
         "--model", action="append", required=True,
         help="Model(s) to use (repeatable: --model X --model Y)")
     parser.add_argument(
         "--output-dir", "-o", default=None,
-        help="Output directory (default: same as JSONL file)")
+        help="Evaluation output directory (default: $BASE/evaluation/)")
     parser.add_argument(
         "--workers", "-w", type=int, default=None,
         help="Max parallel workers (default: number of models)")
@@ -1058,6 +1113,7 @@ def main():
         repos_dir=args.repos_dir,
         models=args.model,
         output_dir=args.output_dir,
+        base_dir=args.base_dir,
         workers=args.workers,
         github_token=args.github_token,
         prompt_version=args.prompt_version,
