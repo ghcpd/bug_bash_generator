@@ -1,3 +1,23 @@
+# Track only these folders:
+#   audit/  auto_run_bugbash/  caseGenerator/  evaluation/  gen_rubric/  generate/
+# Ignore everything else at the root level.
+
+# Ignore all root files/dirs by default
+/*
+
+# Un-ignore the folders we want to track
+!/audit/
+!/auto_run_bugbash/
+!/caseGenerator/
+!/evaluation/
+!/gen_rubric/
+!/generate/
+
+# Also keep these git meta files
+!.gitignore
+!.gitattributes
+
+# Common build artifacts (safety net inside tracked folders)
 __pycache__/
 *.pyc
 *.pyo
@@ -7,6 +27,4 @@ build/
 .eggs/
 .tox/
 *.tmp
-.agents/
-trigger_config.jsonl
-trigger_pipeline.ps1
+node_modules/

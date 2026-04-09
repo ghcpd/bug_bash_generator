@@ -1,15 +1,16 @@
 #!/bin/bash
 # ============================================================================
-# generate_step01_generate_case.sh — Generate ONE synthetic SWE-bench case via Copilot CLI
+# generate_step01_generate_case.sh — Generate ONE SWE-bench case via Copilot CLI
 # ============================================================================
 # Usage (called by ADF Custom Activity — one Batch node per case):
-#   bash generate/generate_step01_generate_case.sh <task_json> <github_token> <prompt_path> <output_base>
+#   bash generate/generate_step01_generate_case.sh <task_json> <github_token> <prompt_path> <output_base> [batch_version]
 #
 # Arguments:
-#   task_json    — Base64-encoded JSON, e.g. {"repo":"https://...","case_index":0,"category":"Logic & Algorithm","difficulty":"L1"}
-#   github_token — GitHub Token for Copilot CLI auth
-#   prompt_path  — Full path to prompt file on mounted storage (falls back to built-in default_prompt.md)
-#   output_base  — Output root directory (mounted storage path)
+#   task_json     — Base64-encoded JSON, e.g. {"repo":"https://...","case_index":0,"category":"Logic & Algorithm","difficulty":"L1"}
+#   github_token  — GitHub Token for Copilot CLI auth
+#   prompt_path   — Full path to prompt file on mounted storage (falls back to built-in default_prompt.md)
+#   output_base   — Output root directory (mounted storage path)
+#   batch_version — (optional) Batch version label. Any string. Defaults to today's date (YYYYMMDD)
 #
 # Architecture:
 #   Each case = one ForEach item = one Batch node = one gh copilot instance.
@@ -31,6 +32,9 @@ TASK_JSON=$(echo "$1" | base64 -d)
 GITHUB_TOKEN="$2"
 PROMPT_PATH="$3"
 OUTPUT_BASE="$4"
+BATCH_VERSION="${5:-$(date +%Y%m%d)}"
+
+echo "=== Batch version: ${BATCH_VERSION} ==="
 
 # ── Parse task JSON with python3 (no jq dependency) ─────────────────────────
 eval "$(python3 -c "
@@ -79,6 +83,7 @@ echo "=== Preflight: auth OK ==="
 
 # ── Prompt file: prefer provided path, fall back to built-in default_prompt.md
 if [ -f "$PROMPT_PATH" ]; then
+    PROMPT_PATH="$(cd "$(dirname "$PROMPT_PATH")" && pwd)/$(basename "$PROMPT_PATH")"
     echo "Using external prompt: $PROMPT_PATH"
 elif [ -f "${SCRIPT_DIR}/default_prompt.md" ]; then
     echo "WARN: Prompt file not found at '$PROMPT_PATH', using built-in default_prompt.md"
@@ -92,7 +97,8 @@ fi
 TARGZ_DIR="${OUTPUT_BASE}/tar.gz"
 JSONL_DIR="${OUTPUT_BASE}/jsonl"
 METRICS_DIR="${OUTPUT_BASE}/metrics"
-mkdir -p "$TARGZ_DIR" "$JSONL_DIR" "$METRICS_DIR"
+IMAGE_CACHE_DIR="${OUTPUT_BASE}/repo_images"
+mkdir -p "$TARGZ_DIR" "$JSONL_DIR" "$METRICS_DIR" "$IMAGE_CACHE_DIR"
 
 # ── Temporary workspace ──────────────────────────────────────────────────────
 WORK_DIR=$(mktemp -d)
@@ -135,14 +141,9 @@ class Recorder:
         self.errors = []
 
     def pytest_collection_modifyitems(self, session, config, items):
-        self.collected = [
-            item.nodeid for item in items
-            if "test_synthetic_" not in item.nodeid
-        ]
+        self.collected = [item.nodeid for item in items]
 
     def pytest_runtest_logreport(self, report):
-        if "test_synthetic_" in report.nodeid:
-            return
         if report.when == "call":
             if report.outcome == "passed":
                 self.passed.append(report.nodeid)
@@ -324,24 +325,23 @@ fi
 
 # Install dependencies (runtime + test) — Docker image
 # Resolution order:
-#   1. DEPS_IMAGE_OVERRIDE env var (explicit image override)
-#   2. Local Docker image exists for this repo → reuse directly
-#   3. Generate Dockerfile, build locally
+#   1. Cached image tar in repo_images → docker load
+#   2. No cache → generate Dockerfile, build locally
 LOCAL_IMAGE_TAG="bugbash-deps-${REPO_SLUG,,}"
+IMAGE_CACHE_TAR="${IMAGE_CACHE_DIR}/${REPO_OWNER}/${REPO_NAME}/deps.tar"
+IMAGE_BUILT_NEW=false
 
-if [ -n "${DEPS_IMAGE_OVERRIDE:-}" ]; then
-    DEPS_IMAGE="$DEPS_IMAGE_OVERRIDE"
-    echo "=== Using pre-built image (env override): ${DEPS_IMAGE} ==="
-    docker pull "$DEPS_IMAGE" 2>&1
+if [ -f "$IMAGE_CACHE_TAR" ]; then
+    echo "=== Cached image found: ${IMAGE_CACHE_TAR} ==="
+    docker load -i "$IMAGE_CACHE_TAR" 2>&1
     if [ $? -ne 0 ]; then
-        echo "ERROR: Failed to pull image ${DEPS_IMAGE}" >&2
+        echo "ERROR: Failed to load cached image from ${IMAGE_CACHE_TAR}" >&2
         exit 1
     fi
+    DEPS_IMAGE="$LOCAL_IMAGE_TAG"
+    echo "=== Loaded cached image: ${DEPS_IMAGE} ==="
 else
-    # Always remove old image and rebuild to pick up Dockerfile changes
-    docker rmi "$LOCAL_IMAGE_TAG" 2>/dev/null || true
-
-    echo "=== Generating dependency Dockerfile ==="
+    echo "=== No cached image for ${REPO_OWNER}/${REPO_NAME}, building from scratch ==="
     DEPS_DOCKERFILE="$WORK_DIR/repo/Dockerfile.deps"
 
     $PY "$SCRIPT_DIR/generate_deps_dockerfile.py" \
@@ -355,6 +355,7 @@ else
         echo "ERROR: Docker build failed — cannot proceed without container" >&2
         exit 1
     fi
+    IMAGE_BUILT_NEW=true
 fi
 echo "=== Dependency image ready: ${DEPS_IMAGE} ==="
 
@@ -386,7 +387,7 @@ NATIVE_BASELINE_JSON="$WORK_DIR/native_tests_clean.json"
 NATIVE_BASELINE_LOG="$WORK_DIR/native_tests_clean.log"
 NATIVE_BASELINE_CONFIRMED=false
 NATIVE_TEST_FILE_COUNT=$(find "$WORK_DIR/repo" -type f \( -path '*/tests/*.py' -o -path '*/test/*.py' -o -name 'test_*.py' -o -name '*_test.py' \) \
-    ! -name 'test_synthetic_*.py' | wc -l | tr -d ' ')
+    | wc -l | tr -d ' ')
 NATIVE_TESTS_PRESENT=false
 BASELINE_REQUIRED=0
 
@@ -433,6 +434,26 @@ except Exception:
     else
         NATIVE_BASELINE_CONFIRMED=true
         echo "=== Native baseline passed (${NATIVE_BASELINE_COUNT} collected test(s)) ==="
+
+        # Save image to shared cache if newly built (so other tasks reuse it)
+        if [ "$IMAGE_BUILT_NEW" = "true" ] && [ ! -f "$IMAGE_CACHE_TAR" ]; then
+            echo "=== Saving image to cache: ${IMAGE_CACHE_TAR} ==="
+            mkdir -p "$(dirname "$IMAGE_CACHE_TAR")"
+            # Save to local disk first (Azure Files SMB can fail on large direct writes)
+            LOCAL_SAVE="$WORK_DIR/deps_image.tar"
+            if docker save -o "$LOCAL_SAVE" "$DEPS_IMAGE" 2>&1; then
+                echo "=== docker save OK ($(du -h "$LOCAL_SAVE" | cut -f1)), copying to shared storage ==="
+                if cp "$LOCAL_SAVE" "${IMAGE_CACHE_TAR}.tmp" 2>&1 && mv "${IMAGE_CACHE_TAR}.tmp" "$IMAGE_CACHE_TAR" 2>&1; then
+                    echo "=== Image cached: ${IMAGE_CACHE_TAR} ($(du -h "$IMAGE_CACHE_TAR" | cut -f1)) ==="
+                else
+                    echo "WARN: Failed to copy image to shared storage (non-fatal)" >&2
+                    rm -f "${IMAGE_CACHE_TAR}.tmp" 2>/dev/null || true
+                fi
+            else
+                echo "WARN: docker save failed (non-fatal)" >&2
+            fi
+            rm -f "$LOCAL_SAVE" 2>/dev/null || true
+        fi
     fi
     fi
 else
@@ -459,7 +480,6 @@ echo "================================================================"
 cd "$WORK_DIR/repo"
 git checkout -- . 2>/dev/null || true
 git clean -fd -e Dockerfile.deps 2>/dev/null || true
-rm -f "test_synthetic_${CASE_INDEX}.py"
 
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
 INSTANCE_HASH=$(echo -n "${REPO_SLUG}-${CASE_INDEX}-${TIMESTAMP}-${ATTEMPT}" | md5sum | cut -c1-8)
@@ -517,34 +537,13 @@ You may still use \`cat\`, \`git\`, \`ls\`, \`find\` etc. directly on the host f
 ### Step 3: Run Existing Tests
 - Run: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest -x --timeout=60\`
 - If ALL existing tests pass: go back to Step 2 for the next feature (up to 3 features total)
-- If ANY existing test fails: move to Step 4
+- If ANY existing test fails: the regression is captured by the failing native tests. Move directly to Step 4.
 - If you completed all 3 features and all tests still pass: output FEATURES_COMPLETE and stop
+- Do NOT create any \`test_synthetic_*.py\` files. We only use the project's existing native tests for verification.
+- Do NOT revert changes or run \`git checkout\`. Leave the repo in the modified (buggy) state.
 
-### Step 4: Extract Minimal Reproducer
-- Examine which existing test(s) failed — understand input, expected output, and actual output
-- Create \`test_synthetic_${CASE_INDEX}.py\` in the repo root
-- Write minimal, independent test functions that reproduce the observed failures — one per distinct failure mode
-- The number of tests doesn't matter — write as many as needed to cover all the broken behavior
-- Tests must be deterministic — NO \`time.time()\` with tight thresholds
-- Test observable behavior, not source code content
-
-### Step 5: Verify FAIL
-- Run: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
-- Confirm the synthetic tests FAIL on the current code
-- If tests PASS, your reproducer is wrong — revise it
-
-### Step 6: Verify PASS
-- Revert all changes: \`git checkout -- .\`
-- Run: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest test_synthetic_${CASE_INDEX}.py -xvs\`
-- Confirm the synthetic tests PASS on the original code
-- If tests FAIL, your reproducer is wrong — revise it
-
-### Step 7: Restore modified state
-- Re-apply your changes so the repo ends in the modified state
-- Verify: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest test_synthetic_${CASE_INDEX}.py -xvs\` should FAIL again
-
-### Step 8: Review actual diff and write issue_text (CRITICAL — do this LAST)
-- Run: \`git diff -- '*.py' ':!test_synthetic_*'\`
+### Step 4: Review actual diff and write issue_text (CRITICAL — do this LAST)
+- Run: \`git diff -- '*.py'\`
 - Read the ACTUAL diff output carefully
 - Write issue_text calibrated to the assigned difficulty level:
   - **L1**: Include the error message/exception. Include a minimal repro snippet. Name the specific API.
@@ -554,43 +553,23 @@ You may still use \`cat\`, \`git\`, \`ls\`, \`find\` etc. directly on the host f
 - NEVER mention source filenames, line numbers, or how to fix — write as a real user
 - This ensures your issue_text accurately matches the actual changes AND the assigned difficulty level
 
-### Step 8.5: Self-check (MANDATORY — output SELF_CHECK block)
+### Step 4.5: Self-check (MANDATORY — output SELF_CHECK block)
 You MUST output a structured self-check BEFORE the CASE_START block. Output it between SELF_CHECK_START and SELF_CHECK_END markers (see the Self-Check section in the prompt above for the exact JSON format).
 
 Rules:
 - Answer honestly: what would a developer investigate first based on your issue_text alone?
 - If \`overall_verdict\` is \`NEEDS_REVISION\`, go back and rewrite your issue_text, then re-run the self-check
-- Do NOT proceed to Step 9 until overall_verdict is PASS
+- Do NOT proceed to Step 5 until overall_verdict is PASS
 
-### Step 9: Output metadata
-Output EXACTLY ONE JSON block between CASE_START and CASE_END markers.
-Do NOT include \`test_code\` — that will be captured from the actual file changes.
-
-CASE_START
-{
-  "instance_id": "${INSTANCE_ID}",
-  "repo": "${REPO_OWNER}/${REPO_NAME}",
-  "base_commit": "${BASE_COMMIT}",
-  "source": "synthetic_mutation",
-  "setup_command": "<actual shell command to install this project>",
-  "test_command": "python3 -m pytest test_synthetic_${CASE_INDEX}.py -xvs",
-  "issue_text": "<markdown bug report describing the SYMPTOM only>",
-  "hints_text": "",
-  "test_filename": "test_synthetic_${CASE_INDEX}.py",
-  "mutation_file": "<relative/path/to/mutated/file.py>",
-  "mutation_description": "<one sentence: what feature you implemented>",
-  "fail_to_pass": ["test_synthetic_${CASE_INDEX}.py::<test_function_name>"],
-  "pass_to_pass": [],
-  "category": "$([ -n "$CATEGORY" ] && echo "${CATEGORY}" || echo "<choose from the 10 categories above>")",
-  "sub_type": "<specific mutation type>",
-  "difficulty": "$([ -n "$DIFFICULTY" ] && echo "${DIFFICULTY}" || echo "<L1|L2|L3|L4>")",
-  "localization": "<explicit|implicit|cross_file|cross_module>",
-  "context_dependency": "<self_contained|local_context|cross_module>",
-  "test_modality": "<unit_test|integration_test>",
-  "capabilities": ["code_understanding", "debugging"],
-  "multi_solution": false
-}
-CASE_END
+### Step 5: Output metadata
+Follow the instructions in the prompt above to create \`case_metadata.json\` in the repo root.
+Use the following values for the environment-provided fields:
+- instance_id: \`${INSTANCE_ID}\`
+- repo: \`${REPO_OWNER}/${REPO_NAME}\`
+- base_commit: \`${BASE_COMMIT}\`
+- CASE_INDEX: \`${CASE_INDEX}\`
+$([ -n "$CATEGORY" ] && echo "- category: \`${CATEGORY}\` (use this exact value)")
+$([ -n "$DIFFICULTY" ] && echo "- difficulty: \`${DIFFICULTY}\` (use this exact value)")
 PROMPT_EOF
 
 # ── Invoke gh copilot agent (single instance per node) ───────────────────────
@@ -600,14 +579,15 @@ COPILOT_EXIT=0
 GENERATE_LOG_DIR="$WORK_DIR/copilot_logs/generate_attempt_${ATTEMPT}"
 mkdir -p "$GENERATE_LOG_DIR"
 GENERATE_START_MS=$(now_ms)
-timeout "$COPILOT_TIMEOUT" gh copilot -- \
+# Use copilot directly (not gh copilot --) for WSL/local compatibility.
+# Pass prompt via file to avoid command-line argument length limits.
+timeout "$COPILOT_TIMEOUT" copilot \
     --log-dir "$GENERATE_LOG_DIR" \
     --log-level debug \
     -p "$(cat "$WORK_DIR/full_prompt.md")" \
-    --yolo \
+    --allow-all \
     --no-ask-user \
     --model "${COPILOT_MODEL:-claude-sonnet-4.6}" \
-    -s \
     2>&1 | tee "$WORK_DIR/copilot_output.txt" || COPILOT_EXIT=$?
 GENERATE_END_MS=$(now_ms)
 GENERATE_WALL_MS=$((GENERATE_END_MS - GENERATE_START_MS))
@@ -642,7 +622,7 @@ echo "=== Agent finished (${OUTPUT_SIZE} bytes output) ==="
 
 # ── Check if agent completed all features without breaking tests (no bug produced) ─
 if grep -q "FEATURES_COMPLETE" "$WORK_DIR/copilot_output.txt" 2>/dev/null; then
-    if ! grep -q "CASE_START" "$WORK_DIR/copilot_output.txt" 2>/dev/null; then
+    if ! grep -q "CASE_START" "$WORK_DIR/copilot_output.txt" 2>/dev/null && [ ! -f "$WORK_DIR/repo/case_metadata.json" ]; then
         echo "FEATURES_COMPLETE: All features implemented successfully. No existing tests were broken — no bug case produced."
         echo "FEATURES_COMPLETE: All features implemented successfully. No existing tests were broken — no bug case produced." >&2
         exit 1
@@ -696,10 +676,10 @@ fi
 cd "$WORK_DIR/repo"
 
 # Stage all new/modified .py files so git diff HEAD captures untracked additions
-git add -A -- '*.py' ':!test_synthetic_*' 2>/dev/null || true
+git add -A -- '*.py' 2>/dev/null || true
 
 # patch = forward diff (model's actual changes, creates the regression)
-PATCH=$(git diff HEAD -- '*.py' ':!test_synthetic_*')
+PATCH=$(git diff HEAD -- '*.py')
 if [ -z "$PATCH" ]; then
     LAST_FAILURE_REASON="no_source_patch"
     echo "WARN: No source file changes detected — retrying" >&2
@@ -715,170 +695,35 @@ NUM_PATCH_FILES=$(echo "$PATCH" | grep -c '^diff --git' || true)
 NUM_PATCH_LINES=$(echo "$PATCH" | grep -cE '^[+-][^+-]' || true)
 echo "=== Patch: ${NUM_PATCH_FILES} file(s), ~${NUM_PATCH_LINES} line(s), difficulty: ${DIFFICULTY:-any} ==="
 
-# Capture test file content
-TEST_FILE="$WORK_DIR/repo/test_synthetic_${CASE_INDEX}.py"
-if [ ! -f "$TEST_FILE" ]; then
-    LAST_FAILURE_REASON="missing_generated_test"
-    echo "WARN: Test file not created by agent — retrying" >&2
+# ── Run native tests on buggy code to find broken_by_mutation ────────────────
+CASE_METADATA_JSON="$WORK_DIR/repo/case_metadata.json"
+
+if [ "$NATIVE_BASELINE_CONFIRMED" != "true" ]; then
+    LAST_FAILURE_REASON="native_baseline_not_confirmed"
+    echo "WARN: Native baseline was not confirmed — cannot compute broken_by_mutation. Retrying." >&2
     continue
 fi
-TEST_CODE=$(cat "$TEST_FILE")
 
-# Inject patch and test_code into copilot output for generate_step04_package_case_artifacts.py
-# If agent didn't produce CASE_START/CASE_END, build metadata from git diff + test file
-python3 -c "
-import json, sys, re, os
-
-output = open(sys.argv[1]).read()
-patch = open(sys.argv[2]).read()
-test_code = open(sys.argv[3]).read()
-instance_id = sys.argv[4]
-repo_slug = sys.argv[5]
-base_commit = sys.argv[6]
-case_index = sys.argv[7]
-category = sys.argv[8] if len(sys.argv) > 8 else ''
-difficulty = sys.argv[9] if len(sys.argv) > 9 else ''
-feature_target = sys.argv[10] if len(sys.argv) > 10 else ''
-
-m = re.search(r'CASE_START\s*\n(.*?)CASE_END', output, re.DOTALL)
-if m:
-    # Agent produced metadata — parse and inject real patch
-    try:
-        case = json.loads(m.group(1).strip())
-    except json.JSONDecodeError:
-        print('WARN: CASE_START/CASE_END found but JSON invalid, building fallback', file=sys.stderr)
-        m = None
-
-if not m:
-    # Fallback: build metadata from what we have
-    print('WARN: No valid CASE_START/CASE_END in agent output — building metadata from git diff', file=sys.stderr)
-
-    # Extract mutation file from patch
-    diff_files = re.findall(r'^diff --git a/(.*?) b/', patch, re.MULTILINE)
-    mutation_file = diff_files[0] if diff_files else 'unknown'
-
-    # Extract test function names from test code
-    test_funcs = re.findall(r'^def (test_\w+)', test_code, re.MULTILINE)
-    test_filename = f'test_synthetic_{case_index}.py'
-    fail_to_pass = [f'{test_filename}::{fn}' for fn in test_funcs]
-
-    repo_owner, repo_name = repo_slug.split('__', 1)
-    case = {
-        'instance_id': instance_id,
-        'repo': f'{repo_owner}/{repo_name}',
-        'base_commit': base_commit,
-        'source': 'synthetic_mutation',
-        'setup_command': 'pip install -e .',
-        'test_command': f'python3 -m pytest {test_filename} -xvs',
-        'issue_text': f'Tests in {test_filename} are failing. The functions {\", \".join(test_funcs[:3])} report unexpected behavior.',
-        'hints_text': '',
-        'test_filename': test_filename,
-        'mutation_file': mutation_file,
-        'mutation_description': f'Bug injected in {mutation_file}',
-        'fail_to_pass': fail_to_pass,
-        'pass_to_pass': [],
-        'category': category or 'Logic & Algorithm',
-        'sub_type': 'auto_detected',
-        'difficulty': difficulty or 'L2',
-        'localization': 'explicit',
-        'context_dependency': 'self_contained',
-        'test_modality': 'unit_test',
-        'capabilities': ['code_understanding', 'debugging'],
-        'multi_solution': False,
-    }
-
-case['patch'] = patch
-case['test_code'] = test_code
-# gold_patch removed — Feature Add has no single correct fix
-
-new_block = 'CASE_START\n' + json.dumps(case, indent=2, ensure_ascii=False) + '\nCASE_END'
-if m:
-    new_output = output[:m.start()] + new_block + output[m.end():]
-else:
-    new_output = output + '\n' + new_block + '\n'
-
-with open(sys.argv[1], 'w') as f:
-    f.write(new_output)
-print('OK: Metadata ready (patch + test_code injected)')
-" "$WORK_DIR/copilot_output.txt" <(echo "$PATCH") <(echo "$TEST_CODE") \
-  "$INSTANCE_ID" "$REPO_SLUG" "$BASE_COMMIT" "$CASE_INDEX" "$CATEGORY" "$DIFFICULTY" "$FEATURE_TARGET"
-
-# ── P1a: Host-side FAIL→PASS verification (independent of agent self-report) ─
-echo "=== Host verification: FAIL→PASS check ==="
-VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"  # 2 minutes for each pytest run
-
-cd "$WORK_DIR/repo"
-
-# Step A: Tests must FAIL on buggy code (current state)
-echo "--- Verifying tests FAIL on buggy code ---"
-FAIL_EXIT=0
-timeout "$VERIFY_TIMEOUT" docker run --rm \
+echo "=== Running native tests on buggy code ==="
+NATIVE_BUGGY_JSON="$WORK_DIR/native_tests_buggy_attempt_${ATTEMPT}.json"
+NATIVE_BUGGY_LOG="$WORK_DIR/native_tests_buggy_attempt_${ATTEMPT}.log"
+NATIVE_BUGGY_EXIT=0
+timeout "$NATIVE_TEST_TIMEOUT" docker run --rm \
     -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" \
-    $CONTAINER_PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
-    > "$WORK_DIR/verify_fail.txt" 2>&1 || FAIL_EXIT=$?
-tail -20 "$WORK_DIR/verify_fail.txt"
+    "$CONTAINER_PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BUGGY_JSON" \
+    -q --rootdir /repo -o addopts= \
+    > "$NATIVE_BUGGY_LOG" 2>&1 || NATIVE_BUGGY_EXIT=$?
 
-# Guard: exit code 1 could mean "pytest not found" — check output for actual test results
-if grep -q "no tests ran\|ModuleNotFoundError\|No module named" "$WORK_DIR/verify_fail.txt" 2>/dev/null; then
-    LAST_FAILURE_REASON="verification_fail_check_invalid"
-    echo "WARN: FAIL check produced suspicious output (pytest issue, not test failure). Retrying." >&2
+if [ "$NATIVE_BUGGY_EXIT" -eq 124 ]; then
+    LAST_FAILURE_REASON="native_buggy_tests_timeout"
+    echo "WARN: Native tests timed out on buggy code (${NATIVE_TEST_TIMEOUT}s). Mutation too destructive — retrying." >&2
     continue
 fi
 
-if [ "$FAIL_EXIT" -eq 0 ]; then
-    LAST_FAILURE_REASON="verification_fail_check_did_not_fail"
-    echo "WARN: Tests PASS on buggy code — mutation is ineffective. Retrying." >&2
-    continue
-fi
-echo "--- FAIL check passed (exit=$FAIL_EXIT) ---"
-
-# Step B: Revert to clean state, tests must PASS
-echo "--- Verifying tests PASS on clean code ---"
-git checkout HEAD -- . 2>/dev/null || true
-git clean -fd -e "test_synthetic_*.py" -e Dockerfile.deps 2>/dev/null || true
-
-PASS_EXIT=0
-timeout "$VERIFY_TIMEOUT" docker run --rm \
-    -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" \
-    $CONTAINER_PY -m pytest "test_synthetic_${CASE_INDEX}.py" -x --tb=short \
-    > "$WORK_DIR/verify_pass.txt" 2>&1 || PASS_EXIT=$?
-tail -20 "$WORK_DIR/verify_pass.txt"
-
-if [ "$PASS_EXIT" -ne 0 ]; then
-    LAST_FAILURE_REASON="verification_pass_check_failed"
-    echo "WARN: Tests FAIL on clean code — synthetic test is broken. Retrying." >&2
-    continue
-fi
-echo "--- PASS check passed ---"
-
-# Step C: Re-apply forward patch to restore buggy state for snapshot
-git add -A -- '*.py' ':!test_synthetic_*' 2>/dev/null || true
-echo "$PATCH" | git apply --allow-empty 2>&1 || true
-echo "=== Host verification: FAIL→PASS confirmed ==="
-
-# ── Host-side native pass_to_pass capture ───────────────────────────────────
+# Compute broken_by_mutation, pass_to_pass, fail_to_pass, test_command
 PASS_TO_PASS_JSON="$WORK_DIR/pass_to_pass_attempt_${ATTEMPT}.json"
-echo "[]" > "$PASS_TO_PASS_JSON"
-if [ "$NATIVE_BASELINE_CONFIRMED" = "true" ]; then
-    echo "=== Host verification: native pass_to_pass check ==="
-    NATIVE_BUGGY_JSON="$WORK_DIR/native_tests_buggy_attempt_${ATTEMPT}.json"
-    NATIVE_BUGGY_LOG="$WORK_DIR/native_tests_buggy_attempt_${ATTEMPT}.log"
-    NATIVE_BUGGY_EXIT=0
-    timeout "$NATIVE_TEST_TIMEOUT" docker run --rm \
-        -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" \
-        "$CONTAINER_PY" "$WORK_DIR/pytest_recorder.py" "$NATIVE_BUGGY_JSON" \
-        -q --rootdir /repo -o addopts= \
-        > "$NATIVE_BUGGY_LOG" 2>&1 || NATIVE_BUGGY_EXIT=$?
-
-    if [ "$NATIVE_BUGGY_EXIT" -eq 124 ]; then
-        LAST_FAILURE_REASON="native_pass_to_pass_timeout"
-        echo "WARN: Native pass_to_pass: original tests did not complete on buggy repo within ${NATIVE_TEST_TIMEOUT}s. Mutation too destructive — retrying." >&2
-        continue
-    fi
-
-    # Calculate pass_to_pass with tolerance: allow up to NATIVE_FAIL_TOLERANCE_PCT% of native tests to break
-    NATIVE_FAIL_TOLERANCE_PCT="${NATIVE_FAIL_TOLERANCE_PCT:-5}"
-    python3 -c "
+FAIL_TO_PASS_JSON="$WORK_DIR/fail_to_pass_attempt_${ATTEMPT}.json"
+python3 -c "
 import json, sys
 baseline = json.load(open(sys.argv[1], encoding='utf-8'))
 buggy = json.load(open(sys.argv[2], encoding='utf-8'))
@@ -886,66 +731,164 @@ baseline_passed = set(baseline.get('passed', []))
 buggy_passed = set(buggy.get('passed', []))
 buggy_failed = set(buggy.get('failed', [])) | set(buggy.get('errors', []))
 
-# Tests that passed on clean but failed on buggy = broken by mutation
-broken_by_mutation = baseline_passed & buggy_failed
+broken_by_mutation = sorted(baseline_passed & buggy_failed)
 shared = sorted(baseline_passed & buggy_passed)
-
-tolerance_pct = int(sys.argv[4])
-baseline_count = len(baseline_passed)
-broken_count = len(broken_by_mutation)
-max_allowed = max(1, baseline_count * tolerance_pct // 100)
 
 with open(sys.argv[3], 'w', encoding='utf-8') as f:
     json.dump(shared, f, ensure_ascii=False)
 
-# Print regressions (tests that were passing but now fail)
+with open(sys.argv[4], 'w', encoding='utf-8') as f:
+    json.dump(broken_by_mutation, f, ensure_ascii=False)
+
+# Print summary
 if broken_by_mutation:
     print('--- Regressions (was PASS, now FAIL) ---', file=sys.stderr)
-    for t in sorted(broken_by_mutation):
+    for t in broken_by_mutation:
         print(f'  REGRESSION: {t}', file=sys.stderr)
-    print(f'--- Total: {broken_count} regression(s) ---', file=sys.stderr)
+    print(f'--- Total: {len(broken_by_mutation)} regression(s) ---', file=sys.stderr)
 
-print(f'{len(shared)}|{broken_count}|{baseline_count}|{max_allowed}')
-" "$NATIVE_BASELINE_JSON" "$NATIVE_BUGGY_JSON" "$PASS_TO_PASS_JSON" "$NATIVE_FAIL_TOLERANCE_PCT" > "$WORK_DIR/pass_to_pass_stats.txt"
-    P2P_STATS=$(cat "$WORK_DIR/pass_to_pass_stats.txt" 2>/dev/null || echo "0|0|0|0")
-    PASS_TO_PASS_COUNT=$(echo "$P2P_STATS" | cut -d'|' -f1)
-    BROKEN_COUNT=$(echo "$P2P_STATS" | cut -d'|' -f2)
-    BASELINE_TOTAL=$(echo "$P2P_STATS" | cut -d'|' -f3)
-    MAX_ALLOWED=$(echo "$P2P_STATS" | cut -d'|' -f4)
+print(f'{len(shared)}|{len(broken_by_mutation)}|{len(baseline_passed)}')
+" "$NATIVE_BASELINE_JSON" "$NATIVE_BUGGY_JSON" "$PASS_TO_PASS_JSON" "$FAIL_TO_PASS_JSON" \
+    > "$WORK_DIR/native_stats.txt"
 
-    echo "=== Native pass_to_pass: ${PASS_TO_PASS_COUNT} green, ${BROKEN_COUNT} broken by mutation (tolerance: disabled for Feature Add) ==="
+NATIVE_STATS=$(cat "$WORK_DIR/native_stats.txt" 2>/dev/null || echo "0|0|0")
+PASS_TO_PASS_COUNT=$(echo "$NATIVE_STATS" | cut -d'|' -f1)
+BROKEN_COUNT=$(echo "$NATIVE_STATS" | cut -d'|' -f2)
+BASELINE_TOTAL=$(echo "$NATIVE_STATS" | cut -d'|' -f3)
 
-    if [ "$PASS_TO_PASS_COUNT" -eq 0 ]; then
-        LAST_FAILURE_REASON="native_pass_to_pass_zero_shared"
-        echo "WARN: No original tests remained passing. Mutation too destructive — retrying." >&2
-        continue
-    fi
+echo "=== Native tests: ${PASS_TO_PASS_COUNT} pass_to_pass, ${BROKEN_COUNT} broken_by_mutation (of ${BASELINE_TOTAL} baseline) ==="
 
-    # Tolerance gate disabled for Feature Add — regressions are expected
-    # if [ "$BROKEN_COUNT" -gt "$MAX_ALLOWED" ]; then
-    #     LAST_FAILURE_REASON="native_pass_to_pass_too_many_broken"
-    #     echo "WARN: Mutation broke ${BROKEN_COUNT} original test(s), exceeding tolerance of ${MAX_ALLOWED} (${NATIVE_FAIL_TOLERANCE_PCT}%). Retrying." >&2
-    #     continue
-    # fi
-    echo "=== Native pass_to_pass captured (${PASS_TO_PASS_COUNT} test(s) stay green) ==="
+if [ "$BROKEN_COUNT" -eq 0 ]; then
+    LAST_FAILURE_REASON="no_tests_broken"
+    echo "WARN: Feature did not break any existing tests — no regression to use. Retrying." >&2
+    continue
 fi
 
+if [ "$PASS_TO_PASS_COUNT" -eq 0 ]; then
+    LAST_FAILURE_REASON="all_tests_broken"
+    echo "WARN: All native tests broken by mutation — too destructive. Retrying." >&2
+    continue
+fi
+
+# Build test_command from broken_by_mutation
+FAIL_TO_PASS_TESTS=$(python3 -c "
+import json, sys
+tests = json.load(open(sys.argv[1], encoding='utf-8'))
+print(' '.join(tests))
+" "$FAIL_TO_PASS_JSON")
+TEST_COMMAND="python3 -m pytest ${FAIL_TO_PASS_TESTS} -xvs"
+echo "=== test_command: ${TEST_COMMAND} ==="
+
+# ── Host verification: FAIL check only (no rollback needed) ──────────────────
+echo "=== Host verification: FAIL check ==="
+VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"
+cd "$WORK_DIR/repo"
+FAIL_EXIT=0
+timeout "$VERIFY_TIMEOUT" docker run --rm \
+    -v "$WORK_DIR/repo:/repo" -v "$WORK_DIR:$WORK_DIR" -w /repo "$DEPS_IMAGE" \
+    bash -c "$TEST_COMMAND" \
+    > "$WORK_DIR/verify_fail.txt" 2>&1 || FAIL_EXIT=$?
+tail -20 "$WORK_DIR/verify_fail.txt"
+
+if [ "$FAIL_EXIT" -eq 0 ]; then
+    LAST_FAILURE_REASON="verification_fail_check_did_not_fail"
+    echo "WARN: Tests PASS on buggy code — broken_by_mutation inconsistent. Retrying." >&2
+    continue
+fi
+echo "--- FAIL check passed (exit=$FAIL_EXIT) ---"
+
+# ── Build case_metadata.json ────────────────────────────────────────────────
+FAIL_TO_PASS_LIST=$(cat "$FAIL_TO_PASS_JSON")
+PASS_TO_PASS_LIST=$(cat "$PASS_TO_PASS_JSON")
+
 python3 -c "
-import json, sys, re
-output_path, pass_to_pass_path = sys.argv[1], sys.argv[2]
-output = open(output_path, encoding='utf-8').read()
-pass_to_pass = json.load(open(pass_to_pass_path, encoding='utf-8'))
-m = re.search(r'CASE_START\s*\n(.*?)CASE_END', output, re.DOTALL)
-if not m:
-    print('WARN: CASE_START/CASE_END missing; cannot inject pass_to_pass', file=sys.stderr)
-    sys.exit(0)
-case = json.loads(m.group(1).strip())
+import json, sys, re, os
+
+metadata_path = sys.argv[1]
+patch = open(sys.argv[2]).read()
+instance_id = sys.argv[3]
+repo_slug = sys.argv[4]
+base_commit = sys.argv[5]
+case_index = sys.argv[6]
+category = sys.argv[7] if len(sys.argv) > 7 else ''
+difficulty = sys.argv[8] if len(sys.argv) > 8 else ''
+test_command = sys.argv[9] if len(sys.argv) > 9 else ''
+fail_to_pass = json.loads(sys.argv[10]) if len(sys.argv) > 10 else []
+pass_to_pass = json.loads(sys.argv[11]) if len(sys.argv) > 11 else []
+test_code = sys.argv[12] if len(sys.argv) > 12 else ''
+batch_version = sys.argv[13] if len(sys.argv) > 13 else ''
+
+# Try to read agent-created case_metadata.json for issue_text and other fields
+case = None
+if os.path.isfile(metadata_path):
+    try:
+        case = json.load(open(metadata_path, encoding='utf-8'))
+        print(f'OK: Read case_metadata.json ({len(case)} keys)', file=sys.stderr)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f'WARN: case_metadata.json invalid ({e}), building from scratch', file=sys.stderr)
+
+if case is None:
+    # Fallback: build metadata from git diff
+    diff_files = re.findall(r'^diff --git a/(.*?) b/', patch, re.MULTILINE)
+    mutation_file = diff_files[0] if diff_files else 'unknown'
+    repo_owner, repo_name = repo_slug.split('__', 1)
+    case = {
+        'instance_id': instance_id,
+        'repo': f'{repo_owner}/{repo_name}',
+        'base_commit': base_commit,
+        'source': 'synthetic_mutation',
+        'setup_command': 'pip install -e .',
+        'issue_text': f'Regression detected: {len(fail_to_pass)} existing test(s) now fail after recent changes.',
+        'hints_text': '',
+        'mutation_file': mutation_file,
+        'mutation_description': f'Feature added in {mutation_file}',
+        'category': category or 'Logic & Algorithm',
+        'sub_type': 'auto_detected',
+        'difficulty': difficulty or 'L2',
+        'localization': 'implicit',
+        'context_dependency': 'local_context',
+        'test_modality': 'unit_test',
+    }
+
+# Host-authoritative fields (override whatever copilot wrote)
+case['instance_id'] = instance_id
+case['base_commit'] = base_commit
+case['test_command'] = test_command
+case['fail_to_pass'] = fail_to_pass
 case['pass_to_pass'] = pass_to_pass
-new_block = 'CASE_START\n' + json.dumps(case, indent=2, ensure_ascii=False) + '\nCASE_END'
-with open(output_path, 'w', encoding='utf-8') as f:
-    f.write(output[:m.start()] + new_block + output[m.end():])
-print('OK: pass_to_pass injected into metadata')
-" "$WORK_DIR/copilot_output.txt" "$PASS_TO_PASS_JSON"
+case['patch'] = patch
+case['batch_version'] = batch_version
+if test_code:
+    case['test_code'] = test_code
+
+# Normalize category into allowed enum, store in labels.category
+VALID_CATEGORIES = {
+    'Logic & Algorithm',
+    'bugrelated',
+    'Data Handling & Transformation',
+    'API & Interface Contract',
+    'Error Handling & Edge Cases',
+    'Infrastructure & Tooling',
+    'Performance & Efficiency',
+    'Security & Access Control',
+    'Configuration & Environment',
+    'Type & Validation',
+    'Documentation & Naming',
+}
+raw_category = case.get('category', '') or case.get('labels', {}).get('category', '') or ''
+if raw_category not in VALID_CATEGORIES:
+    raw_category = 'bugrelated'
+labels = case.get('labels', {}) if isinstance(case.get('labels'), dict) else {}
+labels['category'] = raw_category
+case['labels'] = labels
+
+with open(metadata_path, 'w', encoding='utf-8') as f:
+    json.dump(case, f, indent=2, ensure_ascii=False)
+print(f'OK: case_metadata.json ready (fail_to_pass={len(fail_to_pass)}, pass_to_pass={len(pass_to_pass)}, batch={batch_version})')
+" "$CASE_METADATA_JSON" <(echo "$PATCH") \
+  "$INSTANCE_ID" "$REPO_SLUG" "$BASE_COMMIT" "$CASE_INDEX" \
+  "$CATEGORY" "$DIFFICULTY" "$TEST_COMMAND" \
+  "$FAIL_TO_PASS_LIST" "$PASS_TO_PASS_LIST" "" "$BATCH_VERSION"
 
 # ── P1b: LLM Critic — semantic quality review (disabled — difficulty control deferred) ─
 # Critic is temporarily disabled to maximize case output without quality gates.
@@ -960,16 +903,15 @@ CRITIC_TIMEOUT="${CRITIC_TIMEOUT:-120}"
 
 # Extract issue_text from metadata for critic review
 ISSUE_TEXT=$(python3 -c "
-import json, sys, re
-output = open(sys.argv[1]).read()
-m = re.search(r'CASE_START\s*\n(.*?)CASE_END', output, re.DOTALL)
-if m:
+import json, sys, os
+metadata_path = sys.argv[1]
+if os.path.isfile(metadata_path):
     try:
-        case = json.loads(m.group(1).strip())
+        case = json.load(open(metadata_path, encoding='utf-8'))
         print(case.get('issue_text', ''))
     except: print('')
 else: print('')
-" "$WORK_DIR/copilot_output.txt" 2>/dev/null)
+" "$CASE_METADATA_JSON" 2>/dev/null)
 
 PATCH_SUMMARY=$(echo "$PATCH" | head -40)
 TEST_SUMMARY=$(head -50 "$TEST_FILE")
@@ -1064,22 +1006,21 @@ echo "Critic verdict: $CRITIC_VERDICT"
 
 # Inject critic result into metadata
 python3 -c "
-import json, sys, re
-output = open(sys.argv[1]).read()
+import json, sys, os
+metadata_path = sys.argv[1]
 critic = json.loads(sys.argv[2])
-m = re.search(r'CASE_START\s*\n(.*?)CASE_END', output, re.DOTALL)
-if m:
+if os.path.isfile(metadata_path):
     try:
-        case = json.loads(m.group(1).strip())
+        case = json.load(open(metadata_path, encoding='utf-8'))
         case['critic_review'] = critic
-        new_block = 'CASE_START\n' + json.dumps(case, indent=2, ensure_ascii=False) + '\nCASE_END'
-        output = output[:m.start()] + new_block + output[m.end():]
-        with open(sys.argv[1], 'w') as f:
-            f.write(output)
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(case, f, indent=2, ensure_ascii=False)
         print('OK: Critic review injected into metadata')
     except Exception as e:
         print(f'WARN: Could not inject critic review: {e}', file=sys.stderr)
-" "$WORK_DIR/copilot_output.txt" "$CRITIC_VERDICT"
+else:
+    print('WARN: case_metadata.json not found; skipping critic injection', file=sys.stderr)
+" "$CASE_METADATA_JSON" "$CRITIC_VERDICT"
 
 # Fail on critic rejection (verdict=fail with total<5 means serious quality issue)
 CRITIC_TOTAL=$(python3 -c "
@@ -1153,4 +1094,19 @@ python3 "$SCRIPT_DIR/generate_step04_package_case_artifacts.py" \
     --jsonl-dir "$JSONL_DIR" \
     --metrics-summary "$WORK_DIR/case_metrics_summary.json"
 
-echo "=== Generation complete: ${INSTANCE_ID} ==="
+# ── Copy artifacts to batch-versioned directory ──────────────────────────────
+BATCH_TARGZ_DIR="${OUTPUT_BASE}/${BATCH_VERSION}/tar.gz"
+BATCH_JSONL_DIR="${OUTPUT_BASE}/${BATCH_VERSION}/jsonl"
+mkdir -p "$BATCH_TARGZ_DIR" "$BATCH_JSONL_DIR"
+
+# Find the artifacts just created by step04 (named by INSTANCE_ID)
+if [ -f "${TARGZ_DIR}/${INSTANCE_ID}.tar.gz" ]; then
+    cp "${TARGZ_DIR}/${INSTANCE_ID}.tar.gz" "${BATCH_TARGZ_DIR}/"
+    echo "=== Copied tar.gz to batch dir: ${BATCH_TARGZ_DIR}/${INSTANCE_ID}.tar.gz ==="
+fi
+if [ -f "${JSONL_DIR}/${INSTANCE_ID}.jsonl" ]; then
+    cp "${JSONL_DIR}/${INSTANCE_ID}.jsonl" "${BATCH_JSONL_DIR}/"
+    echo "=== Copied jsonl to batch dir: ${BATCH_JSONL_DIR}/${INSTANCE_ID}.jsonl ==="
+fi
+
+echo "=== Generation complete: ${INSTANCE_ID} (batch: ${BATCH_VERSION}) ==="

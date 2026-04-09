@@ -25,11 +25,26 @@ from pathlib import Path
 
 
 def parse_ai_output(output_path: str) -> list[dict]:
-    """Extract case JSON definitions from AI output, supporting multiple formats."""
+    """Extract case JSON definitions, preferring case_metadata.json file over text parsing."""
+    cases: list[dict] = []
+
+    # Strategy 0 (preferred): Read case_metadata.json from repo dir
+    # output_path is .../copilot_output.txt; case_metadata.json is in the repo dir
+    work_dir = os.path.dirname(output_path)  # $WORK_DIR
+    metadata_json_path = os.path.join(work_dir, "repo", "case_metadata.json")
+    if os.path.isfile(metadata_json_path):
+        try:
+            with open(metadata_json_path, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            if isinstance(obj, dict) and ("instance_id" in obj or "patch" in obj):
+                cases.append(obj)
+                return cases
+        except (json.JSONDecodeError, OSError):
+            pass  # fall through to legacy strategies
+
+    # Legacy fallback: parse from copilot_output.txt
     with open(output_path, "r", encoding="utf-8") as f:
         content = f.read()
-
-    cases: list[dict] = []
 
     # Strategy 1: CASE_START / CASE_END delimiters
     for m in re.finditer(r"CASE_START\s*\n(.*?)CASE_END", content, re.DOTALL):

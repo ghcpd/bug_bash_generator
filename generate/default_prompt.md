@@ -89,3 +89,34 @@ Before submitting, verify your issue_text reads like a genuine user report. Outp
 }
 ```
 If `mentions_any_internal_details` is true or `issue_points_to_changed_code` is true → rewrite issue_text as a more natural user report and re-check.
+
+## Step 9: Output metadata (create a file)
+
+As your **final step**, create a file named `case_metadata.json` in the repository root directory with the following JSON content. Use your file-creation tool to write this file — do NOT print it in terminal output or wrap it in CASE_START/CASE_END markers.
+
+```json
+{
+  "instance_id": "<provided by environment>",
+  "repo": "<owner/name>",
+  "base_commit": "<provided by environment>",
+  "source": "synthetic_mutation",
+  "setup_command": "<actual shell command to install this project>",
+  "test_command": "python3 -m pytest test_synthetic_<CASE_INDEX>.py -xvs",
+  "issue_text": "<your issue report from Step 2d>",
+  "hints_text": "",
+  "test_filename": "test_synthetic_<CASE_INDEX>.py",
+  "mutation_file": "<relative/path/to/mutated/file.py>",
+  "mutation_description": "<one sentence: what feature you implemented>",
+  "fail_to_pass": ["test_synthetic_<CASE_INDEX>.py::<test_function_name>"],
+  "category": "<classify the regression from: Logic & Algorithm | Data Handling & Transformation | API & Interface Contract | Error Handling & Edge Cases | Infrastructure & Tooling | Performance & Efficiency | Security & Access Control | Configuration & Environment | Type & Validation | Documentation & Naming>",
+  "sub_type": "<specific mutation type>",
+  "difficulty": "<L1|L2|L3|L4>",
+  "localization": "<explicit|implicit|cross_file|cross_module>",
+  "context_dependency": "<self_contained|local_context|cross_module>",
+  "test_modality": "<unit_test|integration_test>"
+}
+```
+
+**Important**: The values for `instance_id`, `repo`, `base_commit`, and `CASE_INDEX` will be provided in the "Target Repository Context" section below. Use those exact values.
+
+**Important**: Write the file directly using your file-creation tool. Do NOT output the JSON as text in your conversation.
