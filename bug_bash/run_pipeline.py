@@ -954,20 +954,21 @@ def run_pipeline(
             r["verification"] = {"error": "no patch produced"}
             # Write evaluation.jsonl even for failures
             eval_record = {
+                "reponame": data.get("repo", ""),
                 "instance_id": instance_id,
                 "model": model,
-                "repo": data.get("repo", ""),
                 "batch_version": data.get("batch_version", ""),
+                "issue_text": data.get("issue_text", ""),
+                "fail_to_pass": data.get("fail_to_pass", []),
+                "pass_to_pass": data.get("pass_to_pass", []),
+                "labels": data.get("labels", {}),
                 "resolved": [],
                 "unresolved": data.get("fail_to_pass", []),
                 "still_passing": [],
                 "regressed": [],
                 "test_passed": False,
                 "patch": "",
-                "patch_size": 0,
-                "labels": data.get("labels", {}),
-                "generated_at": r.get("generated_at", ""),
-                "verified_at": datetime.now(timezone.utc).isoformat(),
+                "cost_usd": 1,
                 "error": "no patch produced",
             }
             eval_path = os.path.join(model_eval_dir, "evaluation.jsonl")
@@ -1001,20 +1002,21 @@ def run_pipeline(
 
         # Write evaluation.jsonl to per-model eval directory
         eval_record = {
+            "reponame": data.get("repo", ""),
             "instance_id": instance_id,
             "model": model,
-            "repo": data.get("repo", ""),
             "batch_version": data.get("batch_version", ""),
+            "issue_text": data.get("issue_text", ""),
+            "fail_to_pass": data.get("fail_to_pass", []),
+            "pass_to_pass": data.get("pass_to_pass", []),
+            "labels": data.get("labels", {}),
             "resolved": r.get("verification", {}).get("resolved", []),
             "unresolved": r.get("verification", {}).get("unresolved", []),
             "still_passing": r.get("verification", {}).get("still_passing", []),
             "regressed": r.get("verification", {}).get("regressed", []),
             "test_passed": r.get("test_passed"),
             "patch": patch,
-            "patch_size": len(patch),
-            "labels": data.get("labels", {}),
-            "generated_at": r.get("generated_at", ""),
-            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "cost_usd": 1,
             "error": r.get("error"),
         }
         eval_path = os.path.join(model_eval_dir, "evaluation.jsonl")
