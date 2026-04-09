@@ -146,10 +146,24 @@ def write_jsonl(
     # Build fail_to_pass
     ftp = case.get("fail_to_pass", [])
     if not ftp:
-        test_fn = case.get("test_filename", "test_synthetic.py")
-        ftp = [f"{test_fn}::test_placeholder"]
+        ftp = ["unknown::test_placeholder"]
 
-    test_fn = case.get("test_filename", "test_synthetic.py")
+    # Labels: prefer the already-normalized labels dict from case_metadata.json,
+    # fill in defaults for any missing sub-fields.
+    raw_labels = case.get("labels", {}) if isinstance(case.get("labels"), dict) else {}
+    labels = {
+        "category": raw_labels.get("category") or case.get("category", ""),
+        "sub_type": raw_labels.get("sub_type") or case.get("sub_type", ""),
+        "difficulty": raw_labels.get("difficulty") or case.get("difficulty", "L1"),
+        "localization": raw_labels.get("localization") or case.get("localization", "explicit"),
+        "context_dependency": raw_labels.get("context_dependency") or case.get("context_dependency", "self_contained"),
+        "test_modality": raw_labels.get("test_modality") or case.get("test_modality", "unit_test"),
+        "capabilities": raw_labels.get("capabilities") or case.get("capabilities", []),
+        "multi_solution": raw_labels.get("multi_solution", case.get("multi_solution", False)),
+        "case_index": raw_labels.get("case_index") or case.get("case_index"),
+    }
+    # Remove None values
+    labels = {k: v for k, v in labels.items() if v is not None}
 
     record = {
         "instance_id": instance_id,
@@ -158,7 +172,7 @@ def write_jsonl(
         "workspace_dir": instance_id,
         "source": "synthetic_mutation",
         "setup_command": case.get("setup_command", "SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 pip install -e ."),
-        "test_command": case.get("test_command", f"python -m pytest {test_fn} -xvs"),
+        "test_command": case.get("test_command", ""),
         "issue_text": case.get("issue_text", ""),
         "hints_text": case.get("hints_text", ""),
         "patches": {
@@ -166,16 +180,7 @@ def write_jsonl(
         },
         "fail_to_pass": ftp,
         "pass_to_pass": case.get("pass_to_pass", []),
-        "labels": {
-            "category": case.get("category", ""),
-            "sub_type": case.get("sub_type", ""),
-            "difficulty": case.get("difficulty", "L1"),
-            "localization": case.get("localization", "explicit"),
-            "context_dependency": case.get("context_dependency", "self_contained"),
-            "test_modality": case.get("test_modality", "unit_test"),
-            "capabilities": case.get("capabilities", []),
-            "multi_solution": case.get("multi_solution", False),
-        },
+        "labels": labels,
         "quality": {
             "status": "verified_pending_audit",
             "generation_success": True,
@@ -189,6 +194,7 @@ def write_jsonl(
         "mutation_type": case.get("sub_type", ""),
         "mutation_description": case.get("mutation_description", ""),
         "mutation_file": case.get("mutation_file", ""),
+        "batch_version": case.get("batch_version", ""),
         "num_files_changed": len(set(re.findall(
             r'^diff --git a/(.*?) b/', case.get("patch", ""), re.MULTILINE))),
         "num_lines_changed": case.get("patch", "").count("\n+")
