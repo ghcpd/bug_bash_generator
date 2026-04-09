@@ -12,7 +12,8 @@
 !/evaluation/
 !/gen_rubric/
 !/generate/
-
+!/bug_bash/
+!/auth/
 # Also keep these git meta files
 !.gitignore
 !.gitattributes

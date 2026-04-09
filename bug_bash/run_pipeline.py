@@ -44,6 +44,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 
 # ─────────────────────────────────────────────────────────
@@ -903,6 +904,72 @@ def run_pipeline(
                     "work_dir": None,
                 }
 
+    # ── Step 3.5: Verify patches with test_runner ──
+    from test_runner import run_tests  # noqa: E402 — deferred import
+
+    logging.info(f"\n{'=' * 60}")
+    logging.info("  Verifying patches...")
+    logging.info(f"{'=' * 60}")
+
+    eval_jsonl_dir = os.path.join(out_dir, instance_id, "eval")
+    os.makedirs(eval_jsonl_dir, exist_ok=True)
+
+    for model in models:
+        r = results.get(model, {})
+        patch = r.get("patch", "")
+        safe_model = model.replace("/", "_").replace(":", "_").replace(" ", "-")
+
+        if not patch:
+            log(model, "No patch — skipping verification")
+            r["test_passed"] = False
+            r["verification"] = {"error": "no patch produced"}
+            continue
+
+        log(model, "Verifying patch...")
+        try:
+            verify_result = run_tests(
+                jsonl_data=data,
+                patch=patch,
+                image_tag=image_tag,
+                repo_dir=repo_base,
+                collect=True,
+            )
+            resolved = verify_result.get("resolved", [])
+            unresolved = verify_result.get("unresolved", [])
+            regressed = verify_result.get("regressed", [])
+            r["test_passed"] = len(unresolved) == 0 and len(regressed) == 0
+            r["verification"] = verify_result
+
+            log(model, f"Resolved: {len(resolved)}/{len(data.get('fail_to_pass', []))}, "
+                       f"Regressed: {len(regressed)}, "
+                       f"Pass: {r['test_passed']}")
+        except Exception as e:
+            log(model, f"Verification error: {e}")
+            r["test_passed"] = False
+            r["verification"] = {"error": str(e)}
+
+        # Write per-model evaluation JSONL
+        eval_record = {
+            "instance_id": instance_id,
+            "model": model,
+            "repo": data.get("repo", ""),
+            "batch_version": data.get("batch_version", ""),
+            "resolved": r.get("verification", {}).get("resolved", []),
+            "unresolved": r.get("verification", {}).get("unresolved", []),
+            "still_passing": r.get("verification", {}).get("still_passing", []),
+            "regressed": r.get("verification", {}).get("regressed", []),
+            "test_passed": r.get("test_passed"),
+            "patch_size": len(patch),
+            "labels": data.get("labels", {}),
+            "generated_at": r.get("generated_at", ""),
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "error": r.get("error"),
+        }
+        eval_path = os.path.join(eval_jsonl_dir, f"{safe_model}.eval.jsonl")
+        with open(eval_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(eval_record, ensure_ascii=False) + "\n")
+        log(model, f"Eval JSONL → {eval_path}")
+
     # ── Step 4: Push if requested ──
     if push and token:
         url = git_url
@@ -923,8 +990,10 @@ def run_pipeline(
     for model in models:
         r = results.get(model, {})
         plen = len(r.get("patch", ""))
+        passed = r.get("test_passed")
+        status = "✓" if passed else ("✗" if passed is False else "?")
         err = f" (error: {r['error']})" if r.get("error") else ""
-        logging.info(f"  {model}: patch {plen} chars{err}")
+        logging.info(f"  {status} {model}: patch {plen} chars{err}")
 
     # ── Cleanup ──
     for r in results.values():
