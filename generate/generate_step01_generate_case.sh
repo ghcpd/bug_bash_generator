@@ -522,52 +522,7 @@ echo "DEBUG: PROMPT_TEMPLATE length = ${#PROMPT_TEMPLATE}"
 echo "DEBUG: checkpoint 3 — building full_prompt.md"
 cat > "$WORK_DIR/full_prompt.md" << PROMPT_EOF
 ${PROMPT_TEMPLATE}
-
-## Repository Info
-- Repository: ${REPO_URL}
-- Project: ${REPO_OWNER}/${REPO_NAME}
 $([ -n "$FEATURE_TARGET" ] && echo -e "\n### Assigned Feature Target (MANDATORY)\nYour feature MUST primarily modify \`${FEATURE_TARGET}\`.\nYou may also touch other files if the feature naturally requires it, but the main behavioral change MUST be in this file.")
-
-### Repository Structure
-\`\`\`
-${REPO_TREE}
-\`\`\`
-
-## Your Workflow (follow these steps IN ORDER)
-
-You have tools to read files, modify files, and run shell commands.
-The repository is already cloned at the current working directory.
-
-### Step 1: Explore & Plan
-- Read source files (use \`cat\` or file_read) to understand the codebase
-- Review the project's structure, APIs, and existing tests
-- Plan a realistic, small-to-medium feature that integrates with the existing architecture
-
-### Step 2: Implement Feature
-- Pick a feature from your plan and implement it
-- Modify existing files and/or add new ones as needed
-- Follow the project's coding style and conventions
-
-### Docker Environment (MANDATORY)
-A Docker image \`${DEPS_IMAGE}\` has been pre-built with all runtime and test dependencies installed.
-**ALL shell commands that execute project code or run tests MUST run inside this container:**
-\`\`\`
-docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} <command>
-\`\`\`
-Examples:
-- Run tests: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest -x --timeout=60\`
-- Run a Python script: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 script.py\`
-
-You may still use \`cat\`, \`git\`, \`ls\`, \`find\` etc. directly on the host for reading files.
-**Do NOT \`pip install\` on the host** — the container already has everything.
-
-### Step 3: Run Existing Tests
-- Run: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest -x --timeout=60\`
-- If ALL existing tests pass: go back to Step 2 for the next feature
-- If ANY existing test fails: run \`git add -A && git commit -m "feature development - test failure detected"\`, then stop
-- If you completed all features and all tests still pass: run \`git add -A && git commit -m "feature development complete"\` and stop
-- Do NOT create any \`test_synthetic_*.py\` files. We only use the project's existing native tests for verification.
-- Do NOT revert changes or run \`git checkout\`. Leave the repo as-is.
 PROMPT_EOF
 
 # ── Invoke gh copilot agent (single instance per node) ───────────────────────
