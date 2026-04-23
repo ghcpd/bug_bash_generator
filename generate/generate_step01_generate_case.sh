@@ -205,7 +205,7 @@ import json, sys, glob
 repo_slug = sys.argv[1]
 case_idx = int(sys.argv[2])
 jsonl_dir = sys.argv[3]
-for f in sorted(glob.glob(jsonl_dir + '/feature-add-*.jsonl')):
+for f in sorted(glob.glob(jsonl_dir + '/gen-case__*.jsonl') + glob.glob(jsonl_dir + '/feature-*.jsonl')):
     try:
         with open(f) as fh:
             d = json.loads(fh.readline())
@@ -255,7 +255,7 @@ fi
 
 # Collect previously generated mutation files for diversity hints
 PREV_MUTATIONS=""
-for PREV_JSONL in $(find "$JSONL_DIR" -name "feature-add-*.jsonl" 2>/dev/null | sort); do
+for PREV_JSONL in $(find "$JSONL_DIR" \( -name "gen-case__*.jsonl" -o -name "feature-*.jsonl" \) 2>/dev/null | sort); do
     MUT_FILE=$(python3 -c "
 import json, sys
 try:
@@ -460,6 +460,19 @@ else
     pass_to_pass_fail "Native baseline gate is disabled"
 fi
 
+# ── Session 0: Feature Planning (runs once before retry loop) ─────────────────
+PLAN_MODEL="${PLAN_MODEL:-claude-opus-4.6-1m}"
+if [ "${SKIP_PLAN:-0}" != "1" ]; then
+    echo "=== Running Session 0: Feature Planning ==="
+    bash "$SCRIPT_DIR/generate_step00_plan_features.sh" \
+        "$WORK_DIR/repo" \
+        "$WORK_DIR/feature_plan.txt" \
+        "$PLAN_MODEL" \
+        || echo "WARN: Session 0 failed (non-fatal) — proceeding without feature plan" >&2
+else
+    echo "=== Session 0 skipped (SKIP_PLAN=1) ==="
+fi
+
 # ── Generate case (with auto-retry on quality failures) ──────────────────────
 MAX_RETRIES="${MAX_RETRIES:-3}"
 PROMPT_TEMPLATE=$(cat "$PROMPT_PATH")
@@ -488,17 +501,22 @@ INSTANCE_ID="feature-add-${INSTANCE_HASH}"
 echo "=== Generating case ${CASE_INDEX} for ${REPO_SLUG} (${INSTANCE_ID}) ==="
 
 # ── Build agent prompt ───────────────────────────────────────────────────────
+# Read Session 0 feature plan if available, strip "Blast radius" lines
+# (those are for internal evaluation only — showing them to S1 would make it
+# "be careful" around those areas, reducing the chance of natural bugs)
+FEATURE_PLAN=""
+if [ -f "$WORK_DIR/feature_plan.txt" ]; then
+    FEATURE_PLAN=$(grep -v '^\- \*\*Blast radius\*\*' "$WORK_DIR/feature_plan.txt" | grep -v '^\- \*\*影响范围\*\*')
+    echo "=== Feature plan loaded: $(wc -l < "$WORK_DIR/feature_plan.txt") lines (blast radius stripped) ==="
+fi
+
 cat > "$WORK_DIR/full_prompt.md" << PROMPT_EOF
 ${PROMPT_TEMPLATE}
 
-## Target Repository Context
+## Repository Info
 - Repository: ${REPO_URL}
-- Base commit: ${BASE_COMMIT}
-- Owner: ${REPO_OWNER}
-- Project: ${REPO_NAME}
-- Instance ID: ${INSTANCE_ID}
-- Case index: ${CASE_INDEX}
-$([ -n "$FEATURE_TARGET" ] && echo -e "\n### Assigned Feature Target (MANDATORY)\nYour feature MUST primarily modify \`${FEATURE_TARGET}\`.\nYou may also touch other files if the feature naturally requires it, but the main behavioral change MUST be in this file.\nDo NOT pick a completely unrelated file to modify — the regression should come from changing \`${FEATURE_TARGET}\`.")
+- Project: ${REPO_OWNER}/${REPO_NAME}
+$([ -n "$FEATURE_TARGET" ] && echo -e "\n### Assigned Feature Target (MANDATORY)\nYour feature MUST primarily modify \`${FEATURE_TARGET}\`.\nYou may also touch other files if the feature naturally requires it, but the main behavioral change MUST be in this file.")
 $([ -n "$PREV_MUTATIONS" ] && echo -e "\n### Previously Used Files (DO NOT mutate these again)\n${PREV_MUTATIONS}")
 
 ### Repository Structure
@@ -536,40 +554,11 @@ You may still use \`cat\`, \`git\`, \`ls\`, \`find\` etc. directly on the host f
 
 ### Step 3: Run Existing Tests
 - Run: \`docker run --rm -v ${WORK_DIR}/repo:/repo -v ${WORK_DIR}:${WORK_DIR} -w /repo ${DEPS_IMAGE} python3 -m pytest -x --timeout=60\`
-- If ALL existing tests pass: go back to Step 2 for the next feature (up to 3 features total)
-- If ANY existing test fails: the regression is captured by the failing native tests. Move directly to Step 4.
-- If you completed all 3 features and all tests still pass: output FEATURES_COMPLETE and stop
+- If ALL existing tests pass: go back to Step 2 for the next feature
+- If ANY existing test fails: run \`git add -A && git commit -m "feature development - test failure detected"\`, then stop
+- If you completed all features and all tests still pass: run \`git add -A && git commit -m "feature development complete"\` and stop
 - Do NOT create any \`test_synthetic_*.py\` files. We only use the project's existing native tests for verification.
-- Do NOT revert changes or run \`git checkout\`. Leave the repo in the modified (buggy) state.
-
-### Step 4: Review actual diff and write issue_text (CRITICAL — do this LAST)
-- Run: \`git diff -- '*.py'\`
-- Read the ACTUAL diff output carefully
-- Write issue_text calibrated to the assigned difficulty level:
-  - **L1**: Include the error message/exception. Include a minimal repro snippet. Name the specific API.
-  - **L2**: Describe the feature area and wrong behavior. Include a repro snippet. Do NOT name internal functions.
-  - **L3**: Describe ONLY the symptom. The description must lead a developer to look in the WRONG place first. NO repro code that calls the affected function. NO naming the affected module/function.
-  - **L4**: Be vague, describe intermittent or confusing behavior. Optionally blame the wrong subsystem. NO repro code that reveals the root cause. NO naming ANY internal function/module near the change. Write as a confused end-user, not a developer who has narrowed it down.
-- NEVER mention source filenames, line numbers, or how to fix — write as a real user
-- This ensures your issue_text accurately matches the actual changes AND the assigned difficulty level
-
-### Step 4.5: Self-check (MANDATORY — output SELF_CHECK block)
-You MUST output a structured self-check BEFORE the CASE_START block. Output it between SELF_CHECK_START and SELF_CHECK_END markers (see the Self-Check section in the prompt above for the exact JSON format).
-
-Rules:
-- Answer honestly: what would a developer investigate first based on your issue_text alone?
-- If \`overall_verdict\` is \`NEEDS_REVISION\`, go back and rewrite your issue_text, then re-run the self-check
-- Do NOT proceed to Step 5 until overall_verdict is PASS
-
-### Step 5: Output metadata
-Follow the instructions in the prompt above to create \`case_metadata.json\` in the repo root.
-Use the following values for the environment-provided fields:
-- instance_id: \`${INSTANCE_ID}\`
-- repo: \`${REPO_OWNER}/${REPO_NAME}\`
-- base_commit: \`${BASE_COMMIT}\`
-- CASE_INDEX: \`${CASE_INDEX}\`
-$([ -n "$CATEGORY" ] && echo "- category: \`${CATEGORY}\` (use this exact value)")
-$([ -n "$DIFFICULTY" ] && echo "- difficulty: \`${DIFFICULTY}\` (use this exact value)")
+- Do NOT revert changes or run \`git checkout\`. Leave the repo as-is.
 PROMPT_EOF
 
 # ── Invoke gh copilot agent (single instance per node) ───────────────────────
@@ -620,14 +609,9 @@ if [ "$OUTPUT_SIZE" -lt 100 ]; then
 fi
 echo "=== Agent finished (${OUTPUT_SIZE} bytes output) ==="
 
-# ── Check if agent completed all features without breaking tests (no bug produced) ─
-if grep -q "FEATURES_COMPLETE" "$WORK_DIR/copilot_output.txt" 2>/dev/null; then
-    if ! grep -q "CASE_START" "$WORK_DIR/copilot_output.txt" 2>/dev/null && [ ! -f "$WORK_DIR/repo/case_metadata.json" ]; then
-        echo "FEATURES_COMPLETE: All features implemented successfully. No existing tests were broken — no bug case produced."
-        echo "FEATURES_COMPLETE: All features implemented successfully. No existing tests were broken — no bug case produced." >&2
-        exit 1
-    fi
-fi
+# ── Agent done — pipeline will check for regressions below ───────────────────
+# No FEATURES_COMPLETE / FEATURES_INCOMPLETE markers.
+# The pipeline determines success by running pytest and comparing with baseline.
 
 # ── Self-check validation (disabled — difficulty control deferred) ────────────
 # Self-check and difficulty gates are temporarily disabled to maximize case output.
@@ -797,7 +781,29 @@ if [ "$FAIL_EXIT" -eq 0 ]; then
 fi
 echo "--- FAIL check passed (exit=$FAIL_EXIT) ---"
 
-# ── Build case_metadata.json ────────────────────────────────────────────────
+# ── Session 2: Classify bug and generate issue_text ──────────────────────────
+# S2 reads the diff + test output, writes case_metadata.json with:
+# issue_text, feature_keyword, category, difficulty, mutation_file,
+# mutation_description, repo_description, feature_description, bug_description
+echo "=== Running Session 2: Classify & Report ==="
+
+# Save patch to file for S2 to reference
+echo "$PATCH" > "$WORK_DIR/patch.diff"
+
+S2_MODEL="${S2_MODEL:-claude-opus-4.6}"
+bash "$SCRIPT_DIR/generate_step02_classify_and_report.sh" \
+    "$WORK_DIR" \
+    "$REPO_SLUG" \
+    "$INSTANCE_ID" \
+    "$BASE_COMMIT" \
+    "$CASE_INDEX" \
+    "$S2_MODEL" \
+    "$BATCH_VERSION" \
+    || {
+        echo "WARN: Session 2 failed — proceeding with basic metadata" >&2
+    }
+
+# ── Build case_metadata.json (merge S2 output with pipeline data) ────────────
 FAIL_TO_PASS_LIST=$(cat "$FAIL_TO_PASS_JSON")
 PASS_TO_PASS_LIST=$(cat "$PASS_TO_PASS_JSON")
 
@@ -889,6 +895,86 @@ print(f'OK: case_metadata.json ready (fail_to_pass={len(fail_to_pass)}, pass_to_
   "$INSTANCE_ID" "$REPO_SLUG" "$BASE_COMMIT" "$CASE_INDEX" \
   "$CATEGORY" "$DIFFICULTY" "$TEST_COMMAND" \
   "$FAIL_TO_PASS_LIST" "$PASS_TO_PASS_LIST" "" "$BATCH_VERSION"
+
+# ── Rebuild INSTANCE_ID with descriptive name ────────────────────────────────
+# Now that case_metadata.json has feature_keyword and mutation_type from Copilot,
+# rebuild INSTANCE_ID as: feature-{repo_name}-{feature_keyword}-{bug_type}-{hash}
+# Also ensure repo_description, feature_description, bug_description fields exist.
+NEW_INSTANCE_ID=$(python3 -c "
+import json, sys, os, re
+
+metadata_path = sys.argv[1]
+old_id = sys.argv[2]
+repo_name = sys.argv[3].lower()
+instance_hash = sys.argv[4]
+
+try:
+    case = json.load(open(metadata_path, encoding='utf-8'))
+except Exception:
+    print(old_id)
+    sys.exit(0)
+
+# Extract feature_keyword (agent-provided, human-readable slug)
+feature_kw = case.get('feature_keyword', '')
+if not feature_kw:
+    # Fallback: extract from mutation_description
+    desc = case.get('mutation_description', '')
+    if desc:
+        # Take first 3-4 meaningful words, slugify
+        words = re.findall(r'[a-zA-Z]+', desc)
+        feature_kw = '_'.join(words[:4]).lower()
+    else:
+        feature_kw = 'unknown'
+
+# Extract mutation_type -> bug type slug (use category value directly, slugified)
+VALID_CATEGORIES = {
+    'Logic & Algorithm': 'logic-algorithm',
+    'Data Handling & Transformation': 'data-handling',
+    'API & Interface Contract': 'api-contract',
+    'Error Handling & Edge Cases': 'error-handling',
+    'Infrastructure & Tooling': 'infra-tooling',
+    'Performance & Efficiency': 'performance',
+    'Security & Access Control': 'security',
+    'Configuration & Environment': 'config-env',
+    'Type & Validation': 'type-validation',
+    'Documentation & Naming': 'doc-naming',
+    'bugrelated': 'bugrelated',
+}
+mutation_type = case.get('mutation_type', '') or case.get('category', '') or case.get('labels', {}).get('category', '')
+bug_slug = VALID_CATEGORIES.get(mutation_type, '')
+if not bug_slug:
+    # Try slugifying the raw value
+    bug_slug = re.sub(r'[^a-z0-9]', '_', mutation_type.lower()).strip('_')[:30] if mutation_type else 'unknown'
+
+# Sanitize feature_kw: use hyphens as word separator
+feature_kw = re.sub(r'[^a-z0-9]', '-', feature_kw.lower()).strip('-')[:30]
+# Sanitize bug_slug: use hyphens as word separator
+bug_slug = re.sub(r'[^a-z0-9]', '-', bug_slug.lower()).strip('-')[:30]
+
+new_id = f'gen-case__{repo_name}__{feature_kw}__{bug_slug}__{instance_hash}'
+
+# Ensure description fields exist with fallbacks
+if not case.get('repo_description'):
+    case['repo_description'] = ''
+if not case.get('feature_description'):
+    case['feature_description'] = case.get('mutation_description', '')
+if not case.get('bug_description'):
+    case['bug_description'] = ''
+
+# Update instance_id inside metadata
+case['instance_id'] = new_id
+with open(metadata_path, 'w', encoding='utf-8') as f:
+    json.dump(case, f, indent=2, ensure_ascii=False)
+
+print(new_id)
+" "$CASE_METADATA_JSON" "$INSTANCE_ID" "$REPO_NAME" "$INSTANCE_HASH" 2>/dev/null)
+
+if [ -n "$NEW_INSTANCE_ID" ] && [ "$NEW_INSTANCE_ID" != "$INSTANCE_ID" ]; then
+    echo "=== Instance ID renamed: ${INSTANCE_ID} → ${NEW_INSTANCE_ID} ==="
+    INSTANCE_ID="$NEW_INSTANCE_ID"
+else
+    echo "=== Instance ID unchanged: ${INSTANCE_ID} ==="
+fi
 
 # ── P1b: LLM Critic — semantic quality review (disabled — difficulty control deferred) ─
 # Critic is temporarily disabled to maximize case output without quality gates.

@@ -55,7 +55,6 @@ FALLBACK_TOKENS_PATH = (
     "/mnt/batch/tasks/fsmounts/genaitextdatawu2_code/scripts/quansen/tokens.txt"
 )
 MODEL_ALIASES: dict[str, str] = {
-    "goldeneye-internal": "vscModelA-s360-x4",
 }
 
 _fallback_tokens_cache: list[str] | None = None
@@ -290,6 +289,7 @@ docker exec {container_name} bash -c "cd {CONTAINER_WORKDIR} && {test_cmd}"
 
 ## Workflow
 1. Explore the local repo at {local_repo_dir} to find the buggy code.
+   Do NOT read test files (anything under `tests/`, `test/`, or files starting with `test_`). Locate the bug from the issue description and source code logic, not from test expectations.
 2. Analyze the problem statement to identify the root cause.
 3. Edit files in {local_repo_dir} to fix the bug.
 4. Run tests to verify:
@@ -314,7 +314,7 @@ def build_prompt_v2(data: dict, local_repo_dir: str,
 
     return f"""You are an expert software engineer working in a repository to fix a reported issue.
 
-Your task is to read the issue description, inspect the relevant code and tests, and implement the smallest correct patch.
+Your task is to read the issue description, inspect the relevant source code, and implement the smallest correct patch.
 
 ## Repository
 - Repo: {repo}
@@ -337,23 +337,18 @@ docker exec {container_name} bash -c "cd {CONTAINER_WORKDIR} && {test_cmd}"
 ```
 
 ## Workflow
-1. **Explore**: Read and explore the local repo at {local_repo_dir}.
+1. **Explore**: Read and explore the source code at {local_repo_dir}.
+   Do NOT read test files (anything under `tests/`, `test/`, or files starting with `test_`). Locate the bug from the issue description and source code logic, not from test expectations.
 2. **Root Cause**: Analyze the problem statement to identify the root cause.
-3. **Write a Verification Test**: Write a small focused test that reproduces the bug.
-   - The test should FAIL on the current code and PASS after your fix.
-   - Run the test to confirm it fails.
-4. **Fix the Bug**: Edit the necessary files in {local_repo_dir}.
-5. **Validate**: Run tests to confirm your fix works and nothing else breaks:
+3. **Fix the Bug**: Edit the necessary files in {local_repo_dir}.
+4. **Validate**: Run tests to confirm your fix works and nothing else breaks:
    docker exec {container_name} bash -c "cd {CONTAINER_WORKDIR} && {test_cmd}"
-6. **Iterate** until all tests pass.
-7. **Remove Your Verification Test**: Revert ALL test changes.
-   Use `git checkout -- <test_file>` in {local_repo_dir} to revert each test file.
-8. **Final Patch**: Run `cd {local_repo_dir} && git diff` to output the final patch
-   (bug fix only, no test additions).
+5. **Iterate** until all tests pass.
+6. **Final Patch**: Run `cd {local_repo_dir} && git diff` to output the final patch.
 
 IMPORTANT:
 - Only modify files necessary to fix the bug.
-- The verification test is for development only — remove it before the final patch.
+- Do NOT refactor or change unrelated code.
 - Ensure ALL existing tests still pass.
 """
 
@@ -462,17 +457,24 @@ def call_copilot(prompt: str, model: str, local_repo_dir: str,
 # ─────────────────────────────────────────────────────────
 # Patch extraction
 # ─────────────────────────────────────────────────────────
-def extract_patch(local_repo_dir: str) -> str:
+def extract_patch(local_repo_dir: str, baseline_commit: str = None) -> str:
     subprocess.run(
         ["git", "add", "-N", "."],
         capture_output=True, timeout=10, cwd=local_repo_dir,
     )
+    # Compare against the buggy baseline commit to capture all model changes,
+    # regardless of whether the model committed its fixes or not.
+    diff_target = baseline_commit or "HEAD"
     r = subprocess.run(
-        ["git", "diff"],
+        ["git", "diff", diff_target],
         capture_output=True, text=True, timeout=60,
         cwd=local_repo_dir,
     )
-    return r.stdout.strip()
+    patch = r.stdout
+    # Ensure patch ends with newline (git apply requires it)
+    if patch and not patch.endswith("\n"):
+        patch += "\n"
+    return patch
 
 
 # ─────────────────────────────────────────────────────────
@@ -481,33 +483,50 @@ def extract_patch(local_repo_dir: str) -> str:
 def collect_artifacts(local_repo_dir: str, model: str,
                       share_path: str = None,
                       log_dir: str = None) -> dict[str, str]:
-    """Collect copilot artifacts. Returns {filename: source_path}."""
+    """Collect copilot artifacts. Returns {filename: source_path}.
+
+    If *log_dir* (copilot_logs/) exists, all log files inside it are
+    concatenated into a single ``track.log`` in the parent directory,
+    then the log_dir is removed to avoid confusion across runs.
+    """
     artifacts: dict[str, str] = {}
 
-    # Search both repo dir and log_dir for copilot debug logs
-    search_dirs = [local_repo_dir]
+    # Merge all copilot log files into one track.log, then clean up
     if log_dir and os.path.isdir(log_dir):
-        search_dirs.append(log_dir)
-
-    for search_dir in search_dirs:
-        for pattern, target in [("process-*.log", "track.log"),
-                                ("process-*.jsonl", "track.jsonl")]:
-            if target in artifacts:
-                continue
-            matches = sorted(
-                pathlib.Path(search_dir).glob(pattern),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if matches:
-                artifacts[target] = str(matches[0])
-
-    # Check if track.log already exists
-    for name in ("track.log", "track.jsonl"):
-        for d in search_dirs:
-            p = os.path.join(d, name)
-            if os.path.isfile(p) and name not in artifacts:
-                artifacts[name] = p
+        merged_log = os.path.join(os.path.dirname(log_dir), "track.log")
+        log_files = sorted(
+            pathlib.Path(log_dir).glob("*"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        with open(merged_log, "w", encoding="utf-8", errors="replace") as out:
+            for lf in log_files:
+                if lf.is_file():
+                    out.write(f"\n{'=' * 60}\n")
+                    out.write(f"=== {lf.name}\n")
+                    out.write(f"{'=' * 60}\n")
+                    try:
+                        out.write(lf.read_text(encoding="utf-8", errors="replace"))
+                    except Exception as e:
+                        out.write(f"[Error reading {lf.name}: {e}]\n")
+                    out.write("\n")
+        artifacts["track.log"] = merged_log
+        # Remove copilot_logs/ directory
+        shutil.rmtree(log_dir, ignore_errors=True)
+    else:
+        # Fallback: search for individual log files
+        search_dirs = [local_repo_dir]
+        for search_dir in search_dirs:
+            for pattern, target in [("process-*.log", "track.log"),
+                                    ("process-*.jsonl", "track.jsonl")]:
+                if target in artifacts:
+                    continue
+                matches = sorted(
+                    pathlib.Path(search_dir).glob(pattern),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if matches:
+                    artifacts[target] = str(matches[0])
 
     # Share file (session transcript)
     if share_path and os.path.isfile(share_path):
@@ -527,6 +546,7 @@ def run_model_worker(
     github_token: str = None,
     output_dir: str = None,
     prompt_version: str = "v2",
+    baseline_commit: str = None,
 ) -> dict:
     """Fully isolated worker for a single model."""
     instance_id = data.get("instance_id", "unknown")
@@ -577,7 +597,7 @@ def run_model_worker(
             log(model, f"Output tail: {copilot_output[-300:]}")
 
         # Extract patch
-        patch = extract_patch(local_repo)
+        patch = extract_patch(local_repo, baseline_commit=baseline_commit)
         log(model, f"Patch: {len(patch)} chars, "
             f"{patch.count(chr(10))} lines")
 
@@ -591,9 +611,12 @@ def run_model_worker(
             with open(os.path.join(model_out, "patch.diff"), "w") as f:
                 f.write(patch)
             for name, src in artifacts.items():
-                shutil.copy2(src, os.path.join(model_out, name))
-            shutil.copy2(
-                prompt_path, os.path.join(model_out, "final_prompt.txt"))
+                dst = os.path.join(model_out, name)
+                if os.path.abspath(src) != os.path.abspath(dst):
+                    shutil.copy2(src, dst)
+            if os.path.isfile(prompt_path):
+                shutil.copy2(
+                    prompt_path, os.path.join(model_out, "final_prompt.txt"))
 
         return {
             "model": model,
@@ -676,34 +699,53 @@ def push_results(
     remote_empty = not refs and not any(
         kw in refs_err for kw in ["error", "fatal"])
 
-    # Create remote repo if it doesn't exist
-    if remote_missing:
-        repo_name = os.path.basename(
-            git_url.rstrip("/").removesuffix(".git"))
-        org = git_url.rstrip("/").removesuffix(".git").split("/")[-2]
-        logging.info(f"[push] Creating {org}/{repo_name} ...")
+    repo_name = os.path.basename(
+        git_url.rstrip("/").removesuffix(".git"))
+    org = git_url.rstrip("/").removesuffix(".git").split("/")[-2]
+
+    # If remote repo exists, delete it first for a clean push
+    if not remote_missing:
+        logging.info(f"[push] Deleting existing repo {org}/{repo_name} ...")
         r = subprocess.run(
             [
                 "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                "-X", "POST",
+                "-X", "DELETE",
                 "-H", f"Authorization: Bearer {github_token}",
                 "-H", "Accept: application/vnd.github+json",
-                f"https://api.github.com/orgs/{org}/repos",
-                "-d", json.dumps({
-                    "name": repo_name,
-                    "private": False,
-                    "auto_init": False,
-                }),
+                f"https://api.github.com/repos/{org}/{repo_name}",
             ],
             capture_output=True, text=True, timeout=30,
         )
-        if r.stdout.strip() == "201":
-            logging.info(f"[push] Repository created: {org}/{repo_name}")
+        if r.stdout.strip() in ("204", "200"):
+            logging.info(f"[push] Deleted {org}/{repo_name}")
+            import time
+            time.sleep(3)  # GitHub needs a moment after deletion
         else:
             logging.warning(
-                f"[push] Failed to create repo (HTTP {r.stdout.strip()})")
-    elif not remote_empty and not remote_missing:
-        logging.info("[push] Remote has branches — skipping main push")
+                f"[push] Failed to delete repo (HTTP {r.stdout.strip()})")
+
+    # Create fresh repo
+    logging.info(f"[push] Creating {org}/{repo_name} ...")
+    r = subprocess.run(
+        [
+            "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+            "-X", "POST",
+            "-H", f"Authorization: Bearer {github_token}",
+            "-H", "Accept: application/vnd.github+json",
+            f"https://api.github.com/orgs/{org}/repos",
+            "-d", json.dumps({
+                "name": repo_name,
+                "private": False,
+                "auto_init": False,
+            }),
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.stdout.strip() == "201":
+        logging.info(f"[push] Repository created: {org}/{repo_name}")
+    else:
+        logging.warning(
+            f"[push] Failed to create repo (HTTP {r.stdout.strip()})")
 
     # Set up local git
     ensure_git_repo(repo_base_dir)
@@ -712,12 +754,11 @@ def push_results(
     else:
         _git("remote", "add", "origin", auth_url)
 
-    # Push main if remote was empty/missing
-    if remote_empty or remote_missing:
-        logging.info("[push] Pushing main branch ...")
-        r = _git("push", "-u", "origin", "main")
-        if r.returncode != 0:
-            logging.warning(f"[push] main push failed: {r.stderr}")
+    # Push main (repo is always freshly created)
+    logging.info("[push] Pushing main branch ...")
+    r = _git("push", "-u", "origin", "main")
+    if r.returncode != 0:
+        logging.warning(f"[push] main push failed: {r.stderr}")
 
     # Push per-model branches
     for result in model_results:
@@ -744,17 +785,15 @@ def push_results(
                     f"[push] Patch apply failed for {model}: "
                     f"{proc.stderr[:300]}")
 
-        # Copy artifacts from output directory
+        # Copy artifacts from output directory (files only, skip subdirs)
         if output_dir and instance_id:
             model_out = os.path.join(output_dir, instance_id, safe_model)
             if os.path.isdir(model_out):
                 for fname in os.listdir(model_out):
-                    if fname == "patch.diff":
+                    src = os.path.join(model_out, fname)
+                    if fname == "patch.diff" or os.path.isdir(src):
                         continue
-                    shutil.copy2(
-                        os.path.join(model_out, fname),
-                        os.path.join(repo_base_dir, fname),
-                    )
+                    shutil.copy2(src, os.path.join(repo_base_dir, fname))
 
         # Commit
         _git("add", "-A")
@@ -829,7 +868,8 @@ def run_pipeline(
     output_dir: str = None,
     base_dir: str = None,
     workers: int = None,
-    github_token: str = None,
+    copilot_token: str = None,
+    push_token: str = None,
     prompt_version: str = "v2",
     push: bool = False,
     github_org: str = None,
@@ -837,11 +877,16 @@ def run_pipeline(
 ):
     _setup_logging()
 
-    token = github_token or os.environ.get("GITHUB_TOKEN")
-    if token:
-        logging.info("[init] GITHUB_TOKEN: provided")
+    cop_token = copilot_token or os.environ.get("COPILOT_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    git_push_token = push_token or os.environ.get("GH_PUSH_TOKEN") or cop_token
+    if cop_token:
+        logging.info("[init] Copilot token: provided")
     else:
-        logging.info("[init] GITHUB_TOKEN: not set")
+        logging.info("[init] Copilot token: not set")
+    if git_push_token and git_push_token != cop_token:
+        logging.info("[init] Push token: provided (separate)")
+    elif git_push_token:
+        logging.info("[init] Push token: using copilot token")
 
     logging.info(f"{'=' * 60}")
     logging.info("  Bug Bash Pipeline")
@@ -898,6 +943,40 @@ def run_pipeline(
     base_tmp = tempfile.mkdtemp(prefix=f"bugbash_{instance_id}_base_")
     repo_base = extract_repo(repo_tar, base_tmp)
     ensure_git_repo(repo_base)
+
+    # Commit the current (buggy) state so that git diff only captures
+    # model fixes, not the original mutation from the generate stage.
+    subprocess.run(
+        ["git", "add", "-A"],
+        capture_output=True, timeout=30, cwd=repo_base,
+    )
+    commit_result = subprocess.run(
+        ["git", "commit", "-m", "Buggy baseline (mutation applied)",
+         "--allow-empty"],
+        capture_output=True, text=True, timeout=30, cwd=repo_base,
+    )
+    logging.info(f"  Buggy baseline commit: {commit_result.stdout.strip()}")
+    if commit_result.returncode != 0:
+        logging.warning(f"  Commit stderr: {commit_result.stderr.strip()}")
+
+    # Save the baseline commit hash for later diff comparison
+    baseline_hash_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True, text=True, timeout=10, cwd=repo_base,
+    )
+    buggy_baseline_commit = baseline_hash_result.stdout.strip()
+    logging.info(f"  Baseline hash: {buggy_baseline_commit}")
+
+    # Verify: git diff should now be empty (everything committed)
+    diff_check = subprocess.run(
+        ["git", "diff", "--stat"],
+        capture_output=True, text=True, timeout=10, cwd=repo_base,
+    )
+    if diff_check.stdout.strip():
+        logging.warning(f"  WARNING: Uncommitted changes remain: {diff_check.stdout.strip()[:200]}")
+    else:
+        logging.info("  Repo clean — all buggy changes committed")
+
     logging.info(f"  Repo extracted to: {repo_base}")
 
     # ── Step 3: Run models ──
@@ -909,7 +988,8 @@ def run_pipeline(
         future_map = {
             executor.submit(
                 run_model_worker, model, data, image_tag,
-                repo_base, token, out_dir, prompt_version,
+                repo_base, cop_token, out_dir, prompt_version,
+                buggy_baseline_commit,
             ): model
             for model in models
         }
@@ -961,15 +1041,19 @@ def run_pipeline(
                 "issue_text": data.get("issue_text", ""),
                 "fail_to_pass": data.get("fail_to_pass", []),
                 "pass_to_pass": data.get("pass_to_pass", []),
-                "labels": data.get("labels", {}),
+                "labels": {"category": data.get("labels", {}).get("category", "")},
+                "repo_description": data.get("repo_description", ""),
+                "feature_description": data.get("feature_description", ""),
+                "bug_description": data.get("bug_description", ""),
+                "feature_direction": data.get("feature_direction", ""),
                 "resolved": [],
                 "unresolved": data.get("fail_to_pass", []),
                 "still_passing": [],
                 "regressed": [],
                 "test_passed": False,
                 "patch": "",
+                "track": "",
                 "cost_usd": 1,
-                "error": "no patch produced",
             }
             eval_path = os.path.join(model_eval_dir, "evaluation.jsonl")
             with open(eval_path, "w", encoding="utf-8") as f:
@@ -986,19 +1070,64 @@ def run_pipeline(
                 repo_dir=repo_base,
                 collect=True,
             )
-            resolved = verify_result.get("resolved", [])
-            unresolved = verify_result.get("unresolved", [])
-            regressed = verify_result.get("regressed", [])
-            r["test_passed"] = len(unresolved) == 0 and len(regressed) == 0
-            r["verification"] = verify_result
 
-            log(model, f"Resolved: {len(resolved)}/{len(data.get('fail_to_pass', []))}, "
-                       f"Regressed: {len(regressed)}, "
-                       f"Pass: {r['test_passed']}")
+            # If run_tests returned an error (e.g. patch apply failed),
+            # it returns {"passed": False, "error": "..."} without
+            # resolved/unresolved keys. Treat as failure.
+            if "error" in verify_result or verify_result.get("passed") is False:
+                r["test_passed"] = False
+                r["verification"] = verify_result
+                log(model, f"Verification failed: {verify_result.get('error', 'patch did not apply')}")
+            else:
+                resolved = verify_result.get("resolved", [])
+                unresolved = verify_result.get("unresolved", [])
+                regressed = verify_result.get("regressed", [])
+                ftp_count = len(data.get("fail_to_pass", []))
+                r["test_passed"] = (
+                    len(resolved) == ftp_count
+                    and len(unresolved) == 0
+                    and len(regressed) == 0
+                )
+                r["verification"] = verify_result
+
+                log(model, f"Resolved: {len(resolved)}/{ftp_count}, "
+                           f"Regressed: {len(regressed)}, "
+                           f"Pass: {r['test_passed']}")
         except Exception as e:
             log(model, f"Verification error: {e}")
             r["test_passed"] = False
             r["verification"] = {"error": str(e)}
+
+        # Read track.log content from artifacts
+        track_content = ""
+        track_path = r.get("artifacts", {}).get("track.log", "")
+        if track_path and os.path.isfile(track_path):
+            try:
+                with open(track_path, "r", encoding="utf-8", errors="replace") as tf:
+                    track_content = tf.read()
+            except Exception:
+                track_content = ""
+
+        # Read share file (model session transcript) from artifacts
+        share_content = ""
+        share_key = f"{safe_model}.txt"
+        share_path = r.get("artifacts", {}).get(share_key, "")
+        if share_path and os.path.isfile(share_path):
+            try:
+                with open(share_path, "r", encoding="utf-8", errors="replace") as sf:
+                    share_content = sf.read()
+            except Exception:
+                share_content = ""
+
+        # Read final_prompt.txt from output directory
+        prompt_content = ""
+        prompt_path = os.path.join(model_eval_dir, "final_prompt.txt")
+        if os.path.isfile(prompt_path):
+            try:
+                with open(prompt_path, "r", encoding="utf-8", errors="replace") as pf:
+                    prompt_content = pf.read()
+            except Exception:
+                prompt_content = ""
 
         # Write evaluation.jsonl to per-model eval directory
         eval_record = {
@@ -1009,15 +1138,21 @@ def run_pipeline(
             "issue_text": data.get("issue_text", ""),
             "fail_to_pass": data.get("fail_to_pass", []),
             "pass_to_pass": data.get("pass_to_pass", []),
-            "labels": data.get("labels", {}),
+            "labels": {"category": data.get("labels", {}).get("category", "")},
+            "repo_description": data.get("repo_description", ""),
+            "feature_description": data.get("feature_description", ""),
+            "bug_description": data.get("bug_description", ""),
+            "feature_direction": data.get("feature_direction", ""),
             "resolved": r.get("verification", {}).get("resolved", []),
             "unresolved": r.get("verification", {}).get("unresolved", []),
             "still_passing": r.get("verification", {}).get("still_passing", []),
             "regressed": r.get("verification", {}).get("regressed", []),
             "test_passed": r.get("test_passed"),
+            "prompt": prompt_content,
             "patch": patch,
+            "track": track_content,
+            "session": share_content,
             "cost_usd": 1,
-            "error": r.get("error"),
         }
         eval_path = os.path.join(model_eval_dir, "evaluation.jsonl")
         with open(eval_path, "w", encoding="utf-8") as f:
@@ -1025,7 +1160,7 @@ def run_pipeline(
         log(model, f"evaluation.jsonl → {eval_path}")
 
     # ── Step 4: Push if requested ──
-    if push and token:
+    if push and git_push_token:
         url = git_url
         if not url and github_org:
             url = f"https://github.com/{github_org}/{instance_id}.git"
@@ -1034,7 +1169,7 @@ def run_pipeline(
         else:
             logging.info(f"\n[push] Pushing to {url} ...")
             push_results(
-                repo_base, list(results.values()), url, token,
+                repo_base, list(results.values()), url, git_push_token,
                 out_dir, instance_id)
 
     # ── Summary ──
@@ -1085,8 +1220,12 @@ def main():
         help="Repo archives directory (contains workspace_dir.tar.gz). "
              "Not needed if --base-dir is set.")
     parser.add_argument(
-        "--model", action="append", required=True,
+        "--model", action="append", default=None,
         help="Model(s) to use (repeatable: --model X --model Y)")
+    parser.add_argument(
+        "--models", default=None,
+        help="Comma-separated list of models (alternative to --model). "
+             "E.g. --models 'gpt-4.1,gpt-5.2,claude-opus-4.6'")
     parser.add_argument(
         "--output-dir", "-o", default=None,
         help="Evaluation output directory (default: $BASE/evaluation/)")
@@ -1094,34 +1233,46 @@ def main():
         "--workers", "-w", type=int, default=None,
         help="Max parallel workers (default: number of models)")
     parser.add_argument(
-        "--github-token", default=None,
-        help="GitHub token (default: $GITHUB_TOKEN)")
+        "--copilot-token", default=None,
+        help="Token for Copilot CLI auth (default: $COPILOT_GITHUB_TOKEN or $GITHUB_TOKEN)")
+    parser.add_argument(
+        "--push-token", default=None,
+        help="Token for git push/PR operations (default: $GH_PUSH_TOKEN or copilot-token)")
     parser.add_argument(
         "--prompt-version", default="v2", choices=["v1", "v2"],
         help="Prompt version")
     parser.add_argument(
-        "--push", action="store_true",
-        help="Push results to remote after all models complete")
+        "--no-push", action="store_true",
+        help="Disable pushing results to remote (default: push is enabled)")
     parser.add_argument(
-        "--github-org", default=None,
-        help="GitHub org for auto-creating repos (used with --push)")
+        "--github-org", default="ghcpd",
+        help="GitHub org for auto-creating repos (default: ghcpd)")
     parser.add_argument(
         "--git-url", default=None,
         help="Explicit git URL to push to")
 
     args = parser.parse_args()
 
+    # Resolve models: --models (comma-separated) takes precedence over --model
+    if args.models:
+        models = [m.strip() for m in args.models.split(",") if m.strip()]
+    elif args.model:
+        models = args.model
+    else:
+        parser.error("Either --model or --models is required")
+
     run_pipeline(
         jsonl_file=args.jsonl_file,
         images_dir=args.images_dir,
         repos_dir=args.repos_dir,
-        models=args.model,
+        models=models,
         output_dir=args.output_dir,
         base_dir=args.base_dir,
         workers=args.workers,
-        github_token=args.github_token,
+        copilot_token=args.copilot_token,
+        push_token=args.push_token,
         prompt_version=args.prompt_version,
-        push=args.push,
+        push=not args.no_push,
         github_org=args.github_org,
         git_url=args.git_url,
     )

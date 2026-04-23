@@ -1,0 +1,2142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SWE-bench Case Generator</title>
+<style>
+  :root {
+    --bg: #f4f4f4; --surface: #ffffff; --surface2: #f8f8f8; --surface3: #f0f0f0;
+    --border: #e1e1e1; --border-light: #c8c8c8;
+    --text: #1b1a19; --text-sec: #323130; --muted: #605e5c;
+    --accent: #0078d4; --accent-hover: #106ebe; --accent-dim: rgba(0,120,212,0.08);
+    --accent-dark: #005a9e;
+    --green: #107c10; --green-dim: rgba(16,124,16,0.08);
+    --orange: #ca5010; --orange-dim: rgba(202,80,16,0.08);
+    --red: #d13438; --red-dim: rgba(209,52,56,0.08);
+    --purple: #5c2d91; --purple-dim: rgba(92,45,145,0.08);
+    --cyan: #0078d4; --cyan-dim: rgba(0,120,212,0.06);
+    --r: 4px; --r-lg: 4px;
+    --shadow: 0 1.6px 3.6px rgba(0,0,0,0.08), 0 0.3px 0.9px rgba(0,0,0,0.06);
+    --shadow-lg: 0 6.4px 14.4px rgba(0,0,0,0.1), 0 1.2px 3.6px rgba(0,0,0,0.07);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI','Segoe UI Web (West European)',-apple-system,BlinkMacSystemFont,sans-serif;
+    background:var(--bg);color:var(--text);line-height:1.5;min-height:100vh;font-size:14px}
+  ::selection{background:var(--accent);color:#fff}
+
+  /* ── Header ── */
+  .header{background:#0078d4;padding:0 24px;display:flex;align-items:center;gap:12px;height:48px;
+    border-bottom:none;box-shadow:0 2px 4px rgba(0,0,0,0.12)}
+  .header-logo{width:32px;height:32px;border-radius:3px;
+    background:rgba(255,255,255,0.15);backdrop-filter:blur(6px);
+    display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+  .header h1{font-size:15px;font-weight:600;color:#fff;letter-spacing:0}
+
+  /* ── AzDO Pivot Tabs (replaces flow stepper) ── */
+  .flow{display:flex;align-items:stretch;padding:0 24px;
+    background:var(--surface);border-bottom:1px solid var(--border);gap:0;overflow-x:auto;height:44px}
+  .fstep{display:flex;align-items:center;gap:6px;padding:0 16px;cursor:pointer;
+    border-radius:0;transition:all .15s;white-space:nowrap;position:relative;
+    border-bottom:2px solid transparent;margin-bottom:-2px}
+  .fstep:hover{background:rgba(0,0,0,0.04);color:var(--accent)}
+  .fstep.active{border-bottom-color:var(--accent)}
+  .fstep .sn{display:none}
+  .fstep .sl{font-size:13px;font-weight:600;color:var(--muted);transition:color .15s}
+  .fstep.active .sl{color:var(--accent);font-weight:700}
+  .fstep:hover .sl{color:var(--text)}
+  .fstep.done .sl{color:var(--green)}
+  .fconn{display:none}
+
+  /* ── Main ── */
+  .main{max-width:1400px;margin:0 auto;padding:24px 32px 60px}
+  .tab-panel{display:none;animation:fadeIn .2s ease}
+  .tab-panel.active{display:block}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
+
+  /* ── Cards (AzDO panels) ── */
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+    margin-bottom:16px;overflow:hidden;box-shadow:var(--shadow)}
+  .card-head{padding:12px 16px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;
+    border-bottom:1px solid var(--border);background:var(--surface2)}
+  .card-head .icon{font-size:14px;opacity:.7}
+  .card-body{padding:16px}
+  .card-body.collapsed{display:none}
+  .card-head.collapsible{cursor:pointer;user-select:none}
+  .card-head.collapsible::after{content:'›';margin-left:auto;font-size:16px;color:var(--muted);
+    transition:transform .2s;font-weight:600;font-family:'Segoe UI'}
+  .card-head.collapsible.open::after{transform:rotate(90deg)}
+
+  /* ── Forms ── */
+  .fg{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+  .row{display:grid;gap:12px}
+  .row-2{grid-template-columns:1fr 1fr} .row-3{grid-template-columns:1fr 1fr 1fr}
+  .row-4{grid-template-columns:1fr 1fr 1fr 1fr}
+  label{font-size:12px;font-weight:600;color:var(--text-sec);letter-spacing:0}
+  input,select,textarea{background:#fff;border:1px solid var(--border);border-radius:var(--r);
+    padding:6px 10px;color:var(--text);font-size:13px;font-family:inherit;transition:border-color .1s}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:none}
+  input:hover,select:hover{border-color:var(--border-light)}
+  textarea{resize:vertical}
+  .hint{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5}
+  .hint code{background:var(--surface3);padding:2px 6px;border-radius:var(--r);font-size:11px;
+    color:var(--accent);cursor:pointer;border:1px solid var(--border);transition:all .1s}
+  .hint code:hover{border-color:var(--accent);background:var(--accent-dim)}
+
+  /* ── Task table ── */
+  .ttable{width:100%;border-collapse:collapse;font-size:13px}
+  .ttable th{text-align:left;padding:8px 10px;color:var(--muted);font-size:12px;font-weight:600;
+    border-bottom:1px solid var(--border);background:var(--surface2)}
+  .ttable td{padding:6px 8px;border-bottom:1px solid var(--border)}
+  .ttable input,.ttable select{padding:5px 8px;font-size:12px;border-radius:var(--r);width:100%}
+  .ttable input[type=number]{width:56px;text-align:center}
+  .ttable .col-repo{width:42%} .ttable .col-cat{width:22%} .ttable .col-diff{width:11%}
+  .ttable .col-num{width:11%} .ttable .col-act{width:14%;text-align:center}
+  .ttable tr:hover{background:rgba(0,120,212,.03)}
+  .btn-del{padding:3px 10px;border-radius:var(--r);font-size:11px;cursor:pointer;
+    border:1px solid transparent;background:transparent;color:var(--muted);transition:all .1s}
+  .btn-del:hover{background:var(--red-dim);color:var(--red)}
+  .btn-add-row{padding:6px 14px;border-radius:var(--r);font-size:12px;cursor:pointer;
+    border:1px dashed var(--border-light);background:transparent;color:var(--accent);font-weight:600;transition:all .1s}
+  .btn-add-row:hover{border-color:var(--accent);background:var(--accent-dim)}
+
+  /* ── Quick-add ── */
+  .quick-grid{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end;margin-top:10px}
+  .quick-grid .fg{margin-bottom:0}
+
+  /* ── Buttons (AzDO style) ── */
+  .btn-bar{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
+  .btn{padding:6px 18px;border-radius:var(--r);font-size:13px;font-weight:600;cursor:pointer;border:none;
+    transition:all .15s;display:inline-flex;align-items:center;gap:6px}
+  .btn:disabled{opacity:.35;cursor:not-allowed}
+  .btn-primary{background:#0078d4;color:#fff}
+  .btn-primary:hover:not(:disabled){background:#106ebe}
+  .btn-purple{background:#6b3fa0;color:#fff}
+  .btn-purple:hover:not(:disabled){background:#5c2d91}
+  .btn-ghost{background:transparent;border:1px solid var(--border-light);color:var(--text-sec)}
+  .btn-ghost:hover:not(:disabled){border-color:var(--text-sec);color:var(--text)}
+  .btn-sm{padding:3px 10px;border-radius:var(--r);font-size:11px;font-weight:600;cursor:pointer;
+    border:1px solid var(--border-light);background:transparent;color:var(--text-sec);transition:all .1s;
+    display:inline-flex;align-items:center;gap:4px}
+  .btn-sm:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  .btn-copy{padding:2px 7px;border-radius:var(--r);font-size:10px;font-weight:600;cursor:pointer;
+    border:1px solid var(--border);background:transparent;color:var(--muted);transition:all .1s;
+    display:inline-flex;align-items:center;gap:3px}
+  .btn-copy:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+  .btn-log{padding:3px 8px;border-radius:var(--r);font-size:10px;font-weight:600;cursor:pointer;
+    border:1px solid var(--border);background:transparent;transition:all .1s}
+  .btn-log.stdout{color:var(--green)}.btn-log.stdout:hover{border-color:var(--green);background:var(--green-dim)}
+  .btn-log.stderr{color:var(--orange)}.btn-log.stderr:hover{border-color:var(--orange);background:var(--orange-dim)}
+  .btn-log.json{color:var(--purple)}.btn-log.json:hover{border-color:var(--purple);background:var(--purple-dim)}
+  .btn-open-batch{padding:4px 10px;border-radius:var(--r);font-size:11px;font-weight:700;cursor:pointer;
+    border:1px solid var(--accent);background:var(--accent);color:#fff;transition:all .1s;
+    display:inline-flex;align-items:center;gap:4px}
+  .btn-open-batch:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+
+  /* ── Result panel ── */
+  .result-panel{display:none;margin-top:16px}.result-panel.visible{display:block}
+  .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+  .stat-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);
+    padding:14px 16px;text-align:center}
+  .stat-card:hover{border-color:var(--border-light)}
+  .stat-val{font-size:24px;font-weight:700;color:var(--accent)}
+  .stat-label{font-size:11px;color:var(--muted);margin-top:3px}
+  .summary-table{width:100%;border-collapse:collapse;font-size:12px}
+  .summary-table th{text-align:left;padding:8px 10px;color:var(--muted);font-size:12px;font-weight:600;
+    border-bottom:1px solid var(--border);background:var(--surface2)}
+  .summary-table td{padding:8px 10px;border-bottom:1px solid var(--border)}
+  .summary-table tr:hover{background:rgba(0,120,212,.03)}
+
+  /* ── Status banner ── */
+  .status-banner{margin-top:12px;padding:10px 14px;border-radius:var(--r);font-size:13px;display:none;align-items:center;gap:8px}
+  .status-banner.show{display:flex}
+  .status-banner.ok{background:var(--green-dim);border:1px solid rgba(146,195,83,.3);color:var(--green)}
+  .status-banner.err{background:var(--red-dim);border:1px solid rgba(242,92,92,.3);color:var(--red)}
+
+  /* ── Pipeline Runs ── */
+  .rtable{width:100%;border-collapse:collapse;font-size:12px}
+  .rtable th{text-align:left;padding:8px 10px;color:var(--muted);font-size:12px;font-weight:600;
+    border-bottom:1px solid var(--border);background:var(--surface2)}
+  .rtable td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+  .rtable tr.clickable{cursor:pointer;transition:background .1s}
+  .rtable tr.clickable:hover{background:rgba(0,120,212,.04)}
+  .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:var(--r);
+    font-size:11px;font-weight:600;letter-spacing:0;gap:4px}
+  .badge-succeeded{background:var(--green-dim);color:var(--green)}
+  .badge-failed{background:var(--red-dim);color:var(--red)}
+  .badge-inprogress{background:var(--accent-dim);color:var(--accent)}
+  .badge-queued,.badge-cancelling,.badge-cancelled{background:rgba(138,136,134,.15);color:var(--muted)}
+  .badge-generate{background:var(--cyan-dim);color:var(--accent-dark)}
+  .badge-audit{background:var(--purple-dim);color:var(--purple)}
+  .badge-unknown{background:rgba(138,136,134,.15);color:var(--muted)}
+  .monitor-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .monitor-toolbar select,.monitor-toolbar input{font-size:12px;padding:4px 8px}
+  .monitor-summary{font-size:11px;color:var(--muted);margin-bottom:10px}
+  .linked-hint{margin-top:8px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface2);font-size:11px;color:var(--muted)}
+
+  /* ── Activity panel ── */
+  .act-panel{background:var(--bg);border:1px solid var(--border);border-radius:var(--r-lg);
+    margin-top:14px;overflow:hidden}
+  .act-head{padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    background:var(--surface2);border-bottom:1px solid var(--border);font-weight:600;font-size:13px}
+  .act-progress{display:flex;gap:12px;margin-left:auto;font-size:11px;font-weight:600}
+  .act-progress .ap-s{color:var(--green)} .act-progress .ap-f{color:var(--red)}
+  .act-progress .ap-r{color:var(--orange)} .act-progress .ap-q{color:var(--muted)}
+  .progress-bar{width:100%;height:3px;background:var(--surface3);border-radius:0;overflow:hidden;margin-top:0}
+  .progress-fill{height:100%;border-radius:0;transition:width .3s ease}
+  .act-table{width:100%;border-collapse:collapse;font-size:12px}
+  .act-table th{text-align:left;padding:8px 12px;color:var(--muted);font-size:11px;font-weight:600;
+    border-bottom:1px solid var(--border);background:var(--surface2)}
+  .act-table td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+  .act-table tr:hover{background:rgba(0,120,212,.03)}
+  .act-table tr:last-child td{border-bottom:none}
+  .batch-tid{font-family:'Cascadia Code','Consolas',monospace;font-size:11px;color:var(--cyan)}
+  .err-text{color:var(--red);font-size:11px;max-width:180px;word-break:break-word}
+  .act-actions{display:flex;gap:3px;flex-wrap:nowrap}
+
+  /* ── Batch Explorer ── */
+  .batch-section{margin-top:16px}
+  .batch-jobs-table{width:100%;border-collapse:collapse;font-size:12px}
+  .batch-jobs-table th{text-align:left;padding:8px 12px;color:var(--muted);font-size:11px;font-weight:600;
+    border-bottom:1px solid var(--border);background:var(--surface2)}
+  .batch-jobs-table td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+  .batch-jobs-table tr.clickable{cursor:pointer;transition:background .1s}
+  .batch-jobs-table tr.clickable:hover{background:rgba(0,120,212,.04)}
+  .batch-tasks-panel{background:var(--bg);border:1px solid var(--border);border-radius:var(--r);
+    margin-top:10px;overflow:hidden}
+  .batch-tasks-head{padding:10px 14px;display:flex;align-items:center;gap:8px;
+    background:var(--surface2);border-bottom:1px solid var(--border);font-size:12px;font-weight:600}
+
+  /* ── Modal (AzDO dialog) ── */
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;
+    display:none;align-items:center;justify-content:center;padding:24px}
+  .modal-overlay.show{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+    width:100%;max-width:920px;max-height:85vh;display:flex;flex-direction:column;
+    box-shadow:var(--shadow-lg);animation:modalIn .15s ease}
+  @keyframes modalIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+  .modal-head{padding:12px 18px;display:flex;align-items:center;gap:10px;
+    border-bottom:1px solid var(--border);background:var(--surface2);border-radius:var(--r) var(--r) 0 0}
+  .modal-title{flex:1;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .modal-close{width:28px;height:28px;border-radius:var(--r);border:1px solid var(--border);background:transparent;
+    color:var(--muted);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .1s}
+  .modal-close:hover{background:var(--red-dim);color:var(--red);border-color:var(--red)}
+  .modal-body{flex:1;overflow:auto;padding:16px 18px}
+  .modal-body pre{white-space:pre-wrap;word-break:break-all;font-family:'Cascadia Code','Consolas',monospace;
+    font-size:12px;line-height:1.6;color:var(--text)}
+
+  /* ── Blob Results ── */
+  .blob-file{display:flex;align-items:center;gap:10px;padding:8px 12px;
+    border-bottom:1px solid var(--border);font-size:12px;transition:background .1s}
+  .blob-file:hover{background:rgba(0,120,212,.03)}
+  .blob-file:last-child{border-bottom:none}
+  .blob-icon{font-size:15px;opacity:.6;flex-shrink:0}
+  .blob-name{flex:1;font-family:'Cascadia Code','Consolas',monospace;color:var(--accent);font-size:12px;word-break:break-all}
+  .blob-size{color:var(--muted);font-size:11px;white-space:nowrap}
+  .blob-preview{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);
+    padding:14px;margin-top:12px;font-size:12px;max-height:400px;overflow:auto}
+  .blob-preview pre{white-space:pre-wrap;word-break:break-all;color:var(--green);
+    font-family:'Cascadia Code','Consolas',monospace;font-size:11px;line-height:1.5}
+
+  /* ── Toast ── */
+  .toast{position:fixed;bottom:24px;right:24px;padding:8px 18px;
+    background:var(--surface2);color:var(--accent);border:1px solid var(--border);
+    border-radius:var(--r);font-weight:600;font-size:13px;opacity:0;
+    transition:opacity .2s,transform .2s;pointer-events:none;z-index:300;
+    box-shadow:var(--shadow-lg);transform:translateY(8px)}
+  .toast.show{opacity:1;transform:translateY(0)}
+
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);
+    border-radius:50%;animation:sp .6s linear infinite;vertical-align:middle;margin-right:6px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .empty{text-align:center;padding:28px;color:var(--muted);font-size:13px}
+
+  @media(max-width:700px){
+    .header{padding:0 12px;height:40px}.flow{padding:0 12px;flex-wrap:wrap;height:auto}
+    .main{padding:16px}.row-2,.row-3,.row-4{grid-template-columns:1fr}
+    .quick-grid{grid-template-columns:1fr}.ttable .col-cat,.ttable th:nth-child(2){display:none}
+    .summary-grid{grid-template-columns:1fr 1fr}
+    .act-table th:nth-child(5),.act-table td:nth-child(5){display:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════ Header ════════ -->
+<div class="header">
+  <div class="header-logo">
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M17.5 3.5L9.5 0L1 3L0 10L3 17.5L9.5 18L17 14L18 7L17.5 3.5Z" fill="white" fill-opacity="0.9"/></svg>
+  </div>
+  <h1>SWE-bench Case Generator</h1>
+</div>
+
+<!-- ════════ Flow Stepper ════════ -->
+<div class="flow">
+  <div class="fstep active" onclick="goStep('configure')" id="step-configure">
+    <span class="sn">1</span><span class="sl">Configure</span>
+  </div>
+  <div class="fconn" id="conn-1"></div>
+  <div class="fstep" onclick="goStep('monitor')" id="step-monitor">
+    <span class="sn">2</span><span class="sl">Monitor</span>
+  </div>
+  <div class="fconn" id="conn-2"></div>
+  <div class="fstep" onclick="goStep('results')" id="step-results">
+    <span class="sn">3</span><span class="sl">Results</span>
+  </div>
+  <div class="fstep" onclick="goStep('audit')" id="step-audit">
+    <span class="sn">4</span><span class="sl">Audit</span>
+  </div>
+</div>
+
+<!-- ════════ Main ════════ -->
+<div class="main">
+
+<!-- ── Panel: Configure ── -->
+<div class="tab-panel active" id="panel-configure">
+
+  <!-- Settings -->
+  <div class="card">
+    <div class="card-head collapsible" onclick="toggleCollapse(this)">
+      <span class="icon">🔧</span> Azure &amp; Auth Settings
+    </div>
+    <div class="card-body collapsed">
+      <div class="row row-2">
+        <div class="fg"><label>Subscription ID</label><input id="azSub" value="3cfa45ba-9ce3-42fb-9e1a-47374e9dea5b"></div>
+        <div class="fg"><label>Resource Group</label><input id="azRg" value="acv-dp-wu2-p-001-rg"></div>
+      </div>
+      <div class="row row-2">
+        <div class="fg"><label>Data Factory</label><input id="azFactory" value="acv-dp-wu2-p-001-adf"></div>
+        <div class="fg"><label>Pipeline Name</label><input id="azPipeline" value="bug_bash_batch_generate_pipeline"></div>
+      </div>
+      <div class="row row-2" style="margin-top:4px">
+        <div class="fg"><label>Storage Account</label><input id="azStorage" value="genaitextdatawu2"></div>
+        <div class="fg"><label>Blob Container / Output Folder</label>
+          <div style="display:flex;gap:6px">
+            <input id="azContainer" value="code" style="width:80px;flex-shrink:0">
+            <input id="azOutputFolder" value="data_processing_demo/owen/generate-case" style="flex:1">
+          </div>
+        </div>
+      </div>
+      <div class="row row-4" style="margin-top:4px">
+        <div class="fg"><label>Copilot Model</label><input id="azModel" value="claude-opus-4.6"></div>
+        <div class="fg"><label>Timeout (s)</label><input id="azTimeout" type="number" value="600" min="60" max="3600"></div>
+        <div class="fg"><label>GitHub Token</label><input id="azGhToken" type="password" placeholder="optional" autocomplete="off"></div>
+        <div class="fg"><label>Azure Mgmt Token</label><input id="azToken" type="password" placeholder="for ADF API"></div>
+      </div>
+      <div class="hint" style="margin-top:6px">
+        <b>Mgmt:</b> <code onclick="navigator.clipboard.writeText('az account get-access-token --resource https://management.azure.com --query accessToken -o tsv');toast('Copied!')">az account get-access-token --resource https://management.azure.com ...</code>
+      </div>
+      <div class="row row-2" style="margin-top:12px">
+        <div class="fg"><label>Blob Storage Token</label><input id="azBlobToken" type="password" placeholder="for Results tab"></div>
+        <div class="fg"><label>Batch Account Endpoint</label><input id="azBatchEndpoint" value="acvdpwu2p002ba.westus2.batch.azure.com" placeholder="e.g. myaccount.westus2.batch.azure.com"></div>
+      </div>
+      <div class="fg"><label>Batch Token</label><input id="azBatchToken" type="password" placeholder="for viewing stdout/stderr from Batch"></div>
+      <div class="hint">
+        <b>Storage:</b> <code onclick="navigator.clipboard.writeText('az account get-access-token --resource https://storage.azure.com --query accessToken -o tsv');toast('Copied!')">az ... --resource https://storage.azure.com ...</code> &nbsp;
+        <b>Batch:</b> <code onclick="navigator.clipboard.writeText('az account get-access-token --resource https://batch.core.windows.net --query accessToken -o tsv');toast('Copied!')">az ... --resource https://batch.core.windows.net ...</code>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="btn btn-primary" style="padding:7px 16px;font-size:12px" onclick="importTokens()">📋 Import Tokens from Clipboard</button>
+        <button class="btn btn-ghost" style="padding:7px 16px;font-size:12px" onclick="setCorsOnStorage()">🌐 Enable CORS on Storage</button>
+        <span style="font-size:11px;color:var(--muted)">Terminal: <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11px;color:var(--accent);cursor:pointer" onclick="navigator.clipboard.writeText('.\\scripts\\generate_case\\auth\\get_tokens.ps1');toast('Copied!')">auth/get_tokens.ps1</code> → then click Import</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Add -->
+  <div class="card">
+    <div class="card-head"><span class="icon">📋</span> Quick Add Repos</div>
+    <div class="card-body">
+      <div class="fg">
+        <label>Paste repo URLs (one per line)</label>
+        <textarea id="bulkUrls" rows="3" placeholder="https://github.com/jazzband/prettytable&#10;https://github.com/psf/requests"></textarea>
+      </div>
+      <div class="quick-grid">
+        <div class="fg"><label>Category</label><select id="bulkCat"></select></div>
+        <div class="fg"><label>Difficulty</label><select id="bulkDiff"></select></div>
+        <div class="fg"><label>Cases per repo</label><input id="bulkNum" type="number" value="3" min="1" max="20" style="width:64px"></div>
+        <button class="btn btn-primary" style="height:36px;padding:0 18px" onclick="bulkAdd()">Add All</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Task Table -->
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">📦</span> Tasks
+      <span id="taskCount" style="margin-left:auto;color:var(--orange);font-size:12px;font-weight:700"></span>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="ttable">
+        <thead><tr>
+          <th class="col-repo">Repository</th>
+          <th class="col-cat">Category</th>
+          <th class="col-diff">Diff</th>
+          <th class="col-num">Cases</th>
+          <th class="col-act"></th>
+        </tr></thead>
+        <tbody id="taskBody"></tbody>
+      </table>
+    </div>
+    <div style="padding:8px 18px"><button class="btn-add-row" onclick="addRow()">+ Add Row</button></div>
+  </div>
+
+  <!-- Actions -->
+  <div class="btn-bar">
+    <button class="btn btn-primary" onclick="generate()">Generate Plan</button>
+    <button class="btn btn-purple" id="btnTrigger" onclick="triggerPipeline()" disabled>Trigger Pipeline</button>
+    <button class="btn btn-ghost" onclick="resetAll()">Reset</button>
+  </div>
+
+  <!-- Generated Result -->
+  <div class="result-panel" id="resultPanel">
+    <div class="card">
+      <div class="card-head"><span class="icon">📊</span> Generated Plan</div>
+      <div class="card-body" id="resultBody"></div>
+    </div>
+  </div>
+  <div class="status-banner" id="triggerStatus"></div>
+</div>
+
+<!-- ── Panel: Monitor ── -->
+<div class="tab-panel" id="panel-monitor">
+  <div class="card">
+    <div class="card-head"><span class="icon">🧭</span> Monitor Guide</div>
+    <div class="card-body">
+      <div class="row row-2">
+        <div class="fg" style="margin-bottom:0">
+          <label>Unified Pipeline Runs</label>
+          <div class="hint" style="margin-top:0">All configured pipelines appear in one list with a clear pipeline badge. Use filter and sort controls to focus on generate, audit, or future pipelines. Use <b>Open Batch</b> to jump straight to the Batch Explorer and list all currently running tasks in the selected pool.</div>
+        </div>
+        <div class="fg" style="margin-bottom:0">
+          <label>Batch Explorer</label>
+          <div class="hint" style="margin-top:0">Use this only when you need lower-level Batch jobs, task IDs, stdout, or stderr.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Unified Pipeline Runs -->
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">▶</span>
+      <span style="flex:1">Pipeline Runs</span>
+      <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;margin-right:8px;color:var(--muted)">
+        <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()"> Auto 15s
+      </label>
+      <button class="btn-sm" onclick="refreshMonitor()">⟳ Refresh</button>
+    </div>
+    <div class="card-body">
+      <div class="monitor-summary">Configured pipelines: <code id="monitorGeneratePipelineName">bug_bash_batch_generate_pipeline</code> and <code id="monitorAuditPipelineName">bug_bash_audit_case_pipeline</code>. This filter only matches ADF pipeline runs, not Batch job IDs or task IDs.</div>
+      <div class="monitor-toolbar">
+        <select id="monitorPipelineFilter" onchange="renderCombinedRuns()">
+          <option value="all">All pipelines</option>
+          <option value="generate">Generate only</option>
+          <option value="audit">Audit only</option>
+        </select>
+        <select id="monitorStatusFilter" onchange="renderCombinedRuns()">
+          <option value="all">All statuses</option>
+          <option value="InProgress">In progress</option>
+          <option value="Queued">Queued</option>
+          <option value="Succeeded">Succeeded</option>
+          <option value="Failed">Failed</option>
+          <option value="Cancelled">Cancelled</option>
+        </select>
+        <select id="monitorSort" onchange="renderCombinedRuns()">
+          <option value="start-desc">Newest first</option>
+          <option value="start-asc">Oldest first</option>
+          <option value="duration-desc">Longest duration</option>
+          <option value="duration-asc">Shortest duration</option>
+          <option value="pipeline">Pipeline</option>
+          <option value="status">Status</option>
+        </select>
+        <input id="monitorSearch" placeholder="Search ADF run ID or pipeline..." oninput="renderCombinedRuns()" style="width:220px">
+      </div>
+      <div id="runsContent"><p class="empty">Click Refresh to load pipeline runs</p></div>
+      <div id="activityDetailMonitor"></div>
+    </div>
+  </div>
+
+  <!-- Batch Explorer -->
+  <div class="card batch-section">
+    <div class="card-head">
+      <span class="icon">🔍</span>
+      <span style="flex:1">Batch Explorer</span>
+      <input id="batchPoolFilter" placeholder="Pool ID filter (e.g. test_gen_rubric)" value="test_gen_rubric" style="width:200px;font-size:11px;padding:4px 8px;margin-right:6px">
+      <input id="batchSearch" placeholder="Search Batch task ID or job ID..." style="width:220px;font-size:11px;padding:4px 8px;margin-right:6px" onkeydown="if(event.key==='Enter')searchBatchExplorer()">
+      <button class="btn-sm" onclick="searchBatchExplorer()">Search</button>
+      <button class="btn-sm" onclick="listBatchJobs()">List Jobs</button>
+    </div>
+
+    <div class="card-body">
+      <div class="hint" style="margin-bottom:10px">This view is lower-level than ADF. Use it when you need Batch job state, task IDs, or raw stdout/stderr.</div>
+      <div id="batchLinkStatus" class="linked-hint">Use Open Batch on any pipeline run to list all currently running Batch tasks in the selected pool.</div>
+      <div id="batchJobsContent"><p class="empty">Set Pool ID filter above, then click "List Jobs"</p></div>
+      <div id="batchTasksDetail"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Panel: Results ── -->
+<div class="tab-panel" id="panel-results">
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">📄</span>
+      <span style="flex:1">Blob Storage Output</span>
+      <select id="blobSubfolder" style="width:auto;font-size:12px;padding:4px 8px;margin-right:8px">
+        <option value="jsonl">jsonl/</option>
+        <option value="tar.gz">tar.gz/</option>
+      </select>
+      <button class="btn-sm" onclick="refreshBlobs()">Load Files</button>
+    </div>
+    <div class="card-body">
+      <div id="blobContent"><p class="empty">Click "Load Files" to list output files from blob storage</p></div>
+      <div id="blobPreview"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Panel: Audit ── -->
+<div class="tab-panel" id="panel-audit">
+
+  <!-- Case Selection -->
+  <div class="card">
+    <div class="card-head">
+      <span class="icon">📋</span>
+      <span style="flex:1">Select Cases to Audit</span>
+      <button class="btn-sm" onclick="loadAuditCases()">Load from Blob</button>
+    </div>
+    <div class="card-body">
+      <div id="auditCasesContent"><p class="empty">Click "Load from Blob" to list generated JSONL files</p></div>
+    </div>
+  </div>
+
+  <!-- Audit Config -->
+  <div class="card">
+    <div class="card-head"><span class="icon">⚙</span> Audit Configuration</div>
+    <div class="card-body">
+      <div class="row row-3">
+        <div class="fg">
+          <label>Quick Audit (in-browser)</label>
+          <div class="hint" style="margin-top:0">Runs L1 (JSON schema), L5 (patch-issue coherence), L6 (label reasonableness) directly in the browser — no pipeline needed.</div>
+        </div>
+        <div class="fg">
+          <label>Full Audit (pipeline)</label>
+          <div class="hint" style="margin-top:0">Runs L1-L7 on Azure Batch, including L2 (snapshot integrity), L3 (patch apply), L4 (FAIL→PASS), L7 (anti-cheat).</div>
+        </div>
+        <div class="fg">
+          <label>Audit Level (pipeline only)</label>
+          <select id="auditLevel">
+            <option value="L7">L7 — All checks (recommended)</option>
+            <option value="L4">L4 — Up to FAIL→PASS</option>
+            <option value="L3">L3 — Up to Patch Apply</option>
+            <option value="L1">L1 — Schema only</option>
+          </select>
+        </div>
+      </div>
+      <div class="row row-2" style="margin-top:4px">
+        <div class="fg">
+          <label>Audit Pipeline Name</label>
+          <input id="auditPipelineName" value="bug_bash_audit_case_pipeline">
+        </div>
+        <div class="fg">
+          <label>Audit Output Folder</label>
+          <input id="auditOutputFolder" value="data_processing_demo/owen/generate-case/audit">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="btn-bar">
+    <button class="btn btn-primary" onclick="runQuickAudit()">🔍 Quick Audit (L1/L5/L6)</button>
+    <button class="btn btn-purple" onclick="triggerAuditPipeline()">🚀 Full Audit Pipeline (L1-L7)</button>
+  </div>
+
+  <!-- Quick Audit Results -->
+  <div id="quickAuditResults" style="margin-top:16px"></div>
+
+  <!-- Pipeline Audit Results -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-head">
+      <span class="icon">📊</span>
+      <span style="flex:1">Audit Results (from Blob)</span>
+      <button class="btn-sm" onclick="loadAuditResults()">Load Results</button>
+    </div>
+    <div class="card-body">
+      <div id="auditResultsContent"><p class="empty">Run an audit first, then click "Load Results"</p></div>
+      <div id="auditResultPreview"></div>
+    </div>
+  </div>
+
+</div>
+
+</div><!-- /main -->
+
+<!-- ════════ Log Viewer Modal ════════ -->
+<div class="modal-overlay" id="logModal" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-title" id="logModalTitle">Log Viewer</span>
+      <button class="btn-sm" id="modalRefreshBtn" style="display:none" onclick="refreshModal()">🔄 Refresh</button>
+      <button class="btn-copy" onclick="copyModalContent()">📋 Copy</button>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <pre id="logModalContent">Loading…</pre>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ==================== Constants ==================== */
+const CATEGORIES=['','Logic & Algorithm','Data Handling & Transformation','API & Interface Contract',
+  'Error Handling & Edge Cases','Infrastructure & Tooling','Performance & Efficiency',
+  'Security & Access Control','Configuration & Environment','Type & Validation','Documentation & Naming'];
+const DIFFS=['','L1','L2','L3','L4'];
+const RUN_TYPES={
+  generate:{pipelineInputId:'azPipeline',label:'Generate pipeline',badgeClass:'badge-generate'},
+  audit:{pipelineInputId:'auditPipelineName',label:'Audit pipeline',badgeClass:'badge-audit'}
+};
+let _autoRefreshTimer=null, _expandedRepoList=null, _activityCache={}, _runsCache={generate:[],audit:[]};
+let _activeBatchJobId='';
+let _linkedBatchTaskIds=new Set();
+let _linkedBatchJobIds=new Set();
+let _linkedBatchMatchMap={};
+let _linkedBatchSource='';
+
+/* ==================== Utility ==================== */
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function toggleCollapse(el){el.classList.toggle('open');el.nextElementSibling.classList.toggle('collapsed')}
+function copyText(text,label){navigator.clipboard.writeText(text).then(()=>toast((label||'Text')+' copied!'))}
+function getRunType(kind){return RUN_TYPES[kind]||RUN_TYPES.generate}
+function getPipelineName(kind){return document.getElementById(getRunType(kind).pipelineInputId).value.trim()}
+function syncMonitorLabels(){
+  const gen=document.getElementById('monitorGeneratePipelineName');
+  const audit=document.getElementById('monitorAuditPipelineName');
+  if(gen)gen.textContent=getPipelineName('generate')||'-';
+  if(audit)audit.textContent=getPipelineName('audit')||'-';
+}
+function setBatchLinkStatus(message,isError){
+  const el=document.getElementById('batchLinkStatus');
+  if(!el)return;
+  el.innerHTML=message;
+  el.style.color=isError?'var(--red)':'var(--muted)';
+  el.style.borderColor=isError?'rgba(209,52,56,.3)':'var(--border)';
+  el.style.background=isError?'var(--red-dim)':'var(--surface2)';
+}
+function inferPipelineKindFromText(text){
+  const value=(text||'').toLowerCase();
+  if(!value)return 'unknown';
+  const generateName=(getPipelineName('generate')||'').toLowerCase();
+  const auditName=(getPipelineName('audit')||'').toLowerCase();
+  if(auditName && value.includes(auditName))return 'audit';
+  if(generateName && value.includes(generateName))return 'generate';
+  if(/audit|anti-cheat|fail.?pass|l[1-7]/.test(value))return 'audit';
+  if(/generate|synthetic|critic|repo_list|case_index/.test(value))return 'generate';
+  return 'unknown';
+}
+function getKnownBatchTaskRefs(){
+  const refs={};
+  for(const [key,activities] of Object.entries(_activityCache)){
+    const [kind,runId]=key.split(':');
+    for(const activity of activities||[]){
+      const taskId=activity?.output?.executionDetails?.[0]?.taskId;
+      if(taskId){refs[taskId]={kind,runId,activityName:activity.activityName||''};}
+    }
+  }
+  return refs;
+}
+function inferBatchPipelineForTask(task,jobId){
+  const refs=getKnownBatchTaskRefs();
+  const taskId=task?.id||'';
+  if(taskId && refs[taskId])return refs[taskId].kind;
+  const text=[jobId, taskId, task?.displayName, task?.commandLine].filter(Boolean).join(' ');
+  return inferPipelineKindFromText(text);
+}
+function inferBatchPipelineForJob(job){
+  const jobId=job?.id||'';
+  const cachedTasks=_batchTasksCache[jobId]||[];
+  if(cachedTasks.length){
+    const counts={generate:0,audit:0,unknown:0};
+    for(const task of cachedTasks){counts[inferBatchPipelineForTask(task,jobId)]++;}
+    if(counts.generate||counts.audit){return counts.audit>counts.generate?'audit':'generate';}
+  }
+  return inferPipelineKindFromText([jobId, job?.displayName, job?.url].filter(Boolean).join(' '));
+}
+function clearBatchLinks(){
+  _linkedBatchTaskIds=new Set();
+  _linkedBatchJobIds=new Set();
+  _linkedBatchMatchMap={};
+  _linkedBatchSource='';
+  setBatchLinkStatus('Use Open Batch on any pipeline run to list all currently running Batch tasks in the selected pool.',false);
+}
+function extractActivityTaskIds(activities){
+  const ids=[];
+  for(const activity of activities||[]){
+    const taskId=activity?.output?.executionDetails?.[0]?.taskId;
+    if(taskId)ids.push(taskId);
+  }
+  return [...new Set(ids)];
+}
+function hasInProgressActivities(activities){
+  return (activities||[]).some(activity=>['inprogress','queued'].includes((activity?.status||'').toLowerCase()));
+}
+async function fetchBatchTasks(jobId){
+  if(_batchTasksCache[jobId])return _batchTasksCache[jobId];
+  let allTasks=[];
+  let url=`/jobs/${encodeURIComponent(jobId)}/tasks`;
+  while(url){
+    const resp=await batchFetch(url);
+    const data=await resp.json();
+    allTasks=allTasks.concat(data.value||[]);
+    url=data['odata.nextLink']||null;
+  }
+  _batchTasksCache[jobId]=allTasks;
+  return allTasks;
+}
+
+async function fetchBatchJobsForPool(poolFilter){
+  let allJobs=[];
+  let url='/jobs?maxresults=200';
+  while(url){
+    const resp=await batchFetch(url);
+    const data=await resp.json();
+    allJobs=allJobs.concat(data.value||[]);
+    url=data['odata.nextLink']||null;
+  }
+  if(poolFilter){
+    allJobs=allJobs.filter(j=>{
+      const pool=(j.poolInfo?.poolId||'').toLowerCase();
+      const execPool=(j.executionInfo?.poolId||'').toLowerCase();
+      const pf=poolFilter.toLowerCase();
+      return pool===pf || execPool===pf;
+    });
+  }
+  return allJobs;
+}
+
+async function listBatchJobs(options={}){
+  const {silent=false}=options;
+  const el=document.getElementById('batchJobsContent');
+  if(!silent){
+    el.innerHTML='<p class="empty"><span class="spin"></span> Loading Batch jobs…</p>';
+    document.getElementById('batchTasksDetail').innerHTML='';
+  }
+  try{
+    const poolFilter=document.getElementById('batchPoolFilter').value.trim();
+    const jobs=await fetchBatchJobsForPool(poolFilter,200);
+    _batchJobsCache=jobs;
+    _batchSearchQuery='';
+    _batchSearchMatchedJobIds=null;
+    const searchInput=document.getElementById('batchSearch');
+    if(searchInput)searchInput.value='';
+    if(!silent){
+      if(!jobs.length){el.innerHTML='<p class="empty">No Batch jobs found</p>';return jobs}
+      renderBatchJobs();
+    }
+    return jobs;
+  }catch(e){
+    if(!silent)el.innerHTML=`<p class="empty" style="color:var(--red)">Error: ${esc(e.message)}</p>`;
+    throw e;
+  }
+}
+
+async function searchBatchExplorer(){
+  const input=document.getElementById('batchSearch');
+  const query=(input?.value||'').trim().toLowerCase();
+  _batchSearchQuery=query;
+
+  if(!query){
+    _batchSearchMatchedJobIds=null;
+    renderBatchJobs();
+    if(_activeBatchJobId && _batchTasksCache[_activeBatchJobId])renderBatchTasks(_activeBatchJobId,'all',_taskSortMode,_taskUuidFilter);
+    return;
+  }
+
+  _linkedBatchJobIds=new Set();
+  _linkedBatchTaskIds=new Set();
+  _linkedBatchMatchMap={};
+  _linkedBatchSource='';
+  setBatchLinkStatus(`<span class="spin"></span> Searching Batch jobs and task IDs for <code>${esc(query)}</code>...`,false);
+  try{
+    const poolFilter=document.getElementById('batchPoolFilter').value.trim();
+    const cachedJobs=_batchJobsCache.slice();
+    const fetchedJobs=await fetchBatchJobsForPool(poolFilter,200);
+    const jobsById=new Map();
+    for(const job of [...cachedJobs,...fetchedJobs]){
+      if(job?.id)jobsById.set(job.id,job);
+    }
+    for(const cachedJobId of Object.keys(_batchTasksCache)){
+      if(!jobsById.has(cachedJobId)){
+        jobsById.set(cachedJobId,{id:cachedJobId,state:'cached',creationTime:'',poolInfo:{poolId:poolFilter||'-'}});
+      }
+    }
+    const jobs=[...jobsById.values()];
+    _batchJobsCache=jobs;
+    const matchedJobIds=new Set();
+    let matchedTaskJobId='';
+    let scannedTaskCount=0;
+
+    for(const job of jobs){
+      const rawJobId=job.id||'';
+      const jobId=rawJobId.toLowerCase();
+      const poolId=(job.poolInfo?.poolId||'').toLowerCase();
+      if(jobId.includes(query) || poolId.includes(query))matchedJobIds.add(rawJobId);
+
+      const tasks=await fetchBatchTasks(rawJobId);
+      scannedTaskCount+=tasks.length;
+      if(tasks.some(task=>(task.id||'').toLowerCase().includes(query))){
+        matchedJobIds.add(rawJobId);
+        if(!matchedTaskJobId)matchedTaskJobId=rawJobId;
+      }
+    }
+
+    _batchSearchMatchedJobIds=matchedJobIds;
+    renderBatchJobs();
+
+    if(!matchedJobIds.size){
+      document.getElementById('batchTasksDetail').innerHTML='';
+      setBatchLinkStatus(`No Batch jobs or task IDs matched <code>${esc(query)}</code> in pool <code>${esc(poolFilter||'-')}</code>. Searched ${jobs.length} jobs and ${scannedTaskCount} tasks.`,false);
+      return;
+    }
+
+    const focusJobId=matchedTaskJobId || [...matchedJobIds][0];
+    await loadBatchTasks(focusJobId);
+    renderBatchTasks(focusJobId,'all','id-asc',query);
+    setBatchLinkStatus(`Matched ${matchedJobIds.size} Batch job(s) for <code>${esc(query)}</code> in pool <code>${esc(poolFilter||'-')}</code>. Searched ${jobs.length} jobs and ${scannedTaskCount} tasks. Opened ${esc(focusJobId)} and filtered tasks below.`,false);
+  }catch(e){
+    setBatchLinkStatus(`Batch search failed for <code>${esc(query)}</code>: ${esc(e.message)}`,true);
+  }
+}
+async function linkBatchArtifactsForActivities(activities,sourceLabel){
+  const taskIds=extractActivityTaskIds(activities);
+  _linkedBatchSource=sourceLabel;
+  if(!taskIds.length){
+    clearBatchLinks();
+    if(hasInProgressActivities(activities)){
+      setBatchLinkStatus(`Task IDs are not exposed yet for ${esc(sourceLabel)}. Showing currently active Batch tasks in the selected pool as a fallback.`,false);
+      try{
+        await renderActiveBatchTasksFallback(sourceLabel);
+      }catch(e){
+        setBatchLinkStatus(`Task IDs are not exposed yet for ${esc(sourceLabel)}, and fallback lookup failed: ${esc(e.message)}`,true);
+      }
+    }else{
+      setBatchLinkStatus(`No Batch task IDs were exposed by ${esc(sourceLabel)}. Automatic linking is unavailable for this run.`,false);
+      renderBatchJobs();
+      if(_activeBatchJobId && _batchTasksCache[_activeBatchJobId])renderBatchTasks(_activeBatchJobId,'all',_taskSortMode,_taskUuidFilter);
+    }
+    return;
+  }
+
+  _linkedBatchTaskIds=new Set(taskIds);
+  _linkedBatchJobIds=new Set();
+  _linkedBatchMatchMap={};
+  setBatchLinkStatus(`<span class="spin"></span> Locating ${taskIds.length} Batch task(s) from ${esc(sourceLabel)}…`,false);
+
+  try{
+    const jobs=_batchJobsCache.length?_batchJobsCache:await listBatchJobs({silent:true});
+    const unresolved=new Set(taskIds);
+    const matchMap={};
+    const matchedJobIds=new Set();
+
+    for(const job of jobs){
+      if(!unresolved.size)break;
+      const tasks=await fetchBatchTasks(job.id||'');
+      const hits=tasks.filter(task=>unresolved.has(task.id||''));
+      if(!hits.length)continue;
+      matchMap[job.id]=new Set(hits.map(task=>task.id));
+      matchedJobIds.add(job.id);
+      for(const task of hits)unresolved.delete(task.id);
+    }
+
+    _linkedBatchMatchMap=matchMap;
+    _linkedBatchJobIds=matchedJobIds;
+    renderBatchJobs();
+
+    const matchedCount=taskIds.length-unresolved.size;
+    if(matchedJobIds.size){
+      const firstJobId=[...matchedJobIds][0];
+      _activeBatchJobId=firstJobId;
+      renderLinkedBatchTasksOverview();
+    }
+
+    if(unresolved.size){
+      setBatchLinkStatus(`Matched ${matchedCount}/${taskIds.length} Batch task(s) from ${esc(sourceLabel)}. ${unresolved.size} task(s) could not be resolved to the currently listed jobs.`,false);
+    }else{
+      setBatchLinkStatus(`Matched all ${taskIds.length} Batch task(s) from ${esc(sourceLabel)}. Highlighted jobs and tasks are shown below.`,false);
+    }
+  }catch(e){
+    setBatchLinkStatus(`Failed to link Batch artifacts for ${esc(sourceLabel)}: ${esc(e.message)}`,true);
+  }
+}
+async function renderActiveBatchTasksFallback(sourceLabel){
+  const jobs=_batchJobsCache.length?_batchJobsCache:await listBatchJobs({silent:true});
+  const candidates=[];
+  for(const job of jobs){
+    const jobId=job.id||'';
+    const tasks=await fetchBatchTasks(jobId);
+    for(const task of tasks){
+      const state=(task.state||'').toLowerCase();
+      if(!['running','active','preparing'].includes(state))continue;
+      candidates.push({jobId,task});
+    }
+  }
+
+  const jobsWithCandidates=[...new Set(candidates.map(item=>item.jobId))];
+  _linkedBatchJobIds=new Set(jobsWithCandidates);
+  _linkedBatchMatchMap={};
+  _linkedBatchTaskIds=new Set();
+  for(const {jobId,task} of candidates){
+    if(!_linkedBatchMatchMap[jobId])_linkedBatchMatchMap[jobId]=new Set();
+    _linkedBatchMatchMap[jobId].add(task.id||'');
+    _linkedBatchTaskIds.add(task.id||'');
+  }
+  renderBatchJobs();
+
+  const el=document.getElementById('batchTasksDetail');
+  if(!candidates.length){
+    el.innerHTML=`<div class="batch-tasks-panel"><div class="batch-tasks-head">No active Batch tasks found in the selected pool</div></div>`;
+    return;
+  }
+
+  let h=`<div class="batch-tasks-panel">
+    <div class="batch-tasks-head">
+      <span style="flex:1">Active Batch Tasks Fallback</span>
+      <span style="font-size:11px;color:var(--muted)">${candidates.length} active task(s) from ${esc(sourceLabel)}</span>
+    </div>`;
+  for(const jobId of jobsWithCandidates){
+    const jobTasks=candidates.filter(item=>item.jobId===jobId).map(item=>item.task);
+    h+=`<div style="padding:10px 12px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:11px;color:var(--muted)">Job</span>
+        <span style="font-family:monospace;font-size:11px;color:var(--cyan)">${esc(jobId)}</span>
+        <button class="btn-copy" onclick="copyText('${esc(jobId)}','Job ID')">📋</button>
+        <button class="btn-sm" onclick="loadBatchTasks('${esc(jobId)}')">Open Full Job</button>
+      </div>
+      <table class="act-table"><tr><th>Task ID</th><th>State</th><th>Started</th><th>Duration</th><th>Logs</th></tr>`;
+    for(const task of jobTasks){
+      const tid=task.id||'';
+      const ei=task.executionInfo||{};
+      h+=`<tr style="background:rgba(0,120,212,.08)">
+        <td><span style="font-family:monospace;font-size:11px;color:var(--cyan)">${esc(tid)}</span>
+          <button class="btn-copy" onclick="copyText('${esc(tid)}','Task ID')">📋</button></td>
+        <td>${statusBadge(task.state)}</td>
+        <td style="font-size:11px">${fmtTime(ei.startTime||task.creationTime)}</td>
+        <td style="font-size:11px">${fmtDuration(ei.startTime||task.creationTime,ei.endTime)}</td>
+        <td class="act-actions">
+          <button class="btn-log stdout" onclick="viewBatchFile('${esc(jobId)}','${esc(tid)}','stdout.txt')">stdout</button>
+          <button class="btn-log stderr" onclick="viewBatchFile('${esc(jobId)}','${esc(tid)}','stderr.txt')">stderr</button>
+        </td></tr>`;
+    }
+    h+='</table></div>';
+  }
+  h+='</div>';
+  el.innerHTML=h;
+}
+function renderLinkedBatchTasksOverview(){
+  const el=document.getElementById('batchTasksDetail');
+  const jobIds=[..._linkedBatchJobIds];
+  if(!jobIds.length){
+    el.innerHTML='';
+    return;
+  }
+  let h=`<div class="batch-tasks-panel">
+    <div class="batch-tasks-head">
+      <span style="flex:1">Linked Batch Tasks</span>
+      <span style="font-size:11px;color:var(--muted)">${_linkedBatchTaskIds.size} task(s) from ${esc(_linkedBatchSource||'selected run')}</span>
+    </div>`;
+  for(const jobId of jobIds){
+    const tasks=(_batchTasksCache[jobId]||[]).filter(task=>_linkedBatchMatchMap[jobId]?.has(task.id||''));
+    h+=`<div style="padding:10px 12px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:11px;color:var(--muted)">Job</span>
+        <span style="font-family:monospace;font-size:11px;color:var(--cyan)">${esc(jobId)}</span>
+        <button class="btn-copy" onclick="copyText('${esc(jobId)}','Job ID')">📋</button>
+        <button class="btn-sm" onclick="loadBatchTasks('${esc(jobId)}')">Open Full Job</button>
+      </div>
+      <table class="act-table"><tr><th>Task ID</th><th>State</th><th>Exit</th><th>Duration</th><th>Logs</th></tr>`;
+    if(!tasks.length){
+      h+=`<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:12px">No linked tasks cached for this job</td></tr>`;
+    }
+    for(const task of tasks){
+      const tid=task.id||'';
+      const ei=task.executionInfo||{};
+      const exitCode=ei.exitCode;
+      const exitColor=exitCode===0?'var(--green)':exitCode!==undefined?'var(--red)':'var(--muted)';
+      h+=`<tr style="background:rgba(0,120,212,.08)">
+        <td><span style="font-family:monospace;font-size:11px;color:var(--cyan)">${esc(tid)}</span>
+          <button class="btn-copy" onclick="copyText('${esc(tid)}','Task ID')">📋</button></td>
+        <td>${statusBadge(task.state)}</td>
+        <td style="font-family:monospace;font-size:11px;color:${exitColor}">${exitCode!==undefined?exitCode:'-'}</td>
+        <td style="font-size:11px">${fmtDuration(ei.startTime,ei.endTime)}</td>
+        <td class="act-actions">
+          <button class="btn-log stdout" onclick="viewBatchFile('${esc(jobId)}','${esc(tid)}','stdout.txt')">stdout</button>
+          <button class="btn-log stderr" onclick="viewBatchFile('${esc(jobId)}','${esc(tid)}','stderr.txt')">stderr</button>
+        </td></tr>`;
+    }
+    h+='</table></div>';
+  }
+  h+='</div>';
+  el.innerHTML=h;
+}
+
+/* ==================== Flow Stepper ==================== */
+const STEPS=['configure','monitor','results','audit'];
+function goStep(name){
+  STEPS.forEach(s=>{
+    const el=document.getElementById('step-'+s);
+    el.classList.toggle('active',s===name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='panel-'+name));
+  try{localStorage.setItem('swebench_active_tab',name)}catch{}
+}
+
+/* ==================== Formatters ==================== */
+function fmtDuration(start,end){
+  if(!start)return'-';
+  const sec=Math.floor(((end?new Date(end):new Date())-new Date(start))/1000);
+  if(sec<60)return sec+'s';if(sec<3600)return Math.floor(sec/60)+'m '+(sec%60)+'s';
+  return Math.floor(sec/3600)+'h '+Math.floor((sec%3600)/60)+'m';
+}
+function fmtTime(iso){
+  if(!iso)return'-';
+  return new Date(iso).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+}
+function fmtBytes(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';return(b/1048576).toFixed(1)+' MB'}
+function statusBadge(status){
+  const s=(status||'').toLowerCase().replace(/\s/g,'');
+  let c='badge-queued';
+  if(s==='succeeded')c='badge-succeeded';else if(s==='failed')c='badge-failed';
+  else if(s==='inprogress')c='badge-inprogress';else if(s==='cancelling'||s==='cancelled')c='badge-cancelled';
+  return`<span class="badge ${c}">${esc(status||'Unknown')}</span>`;
+}
+
+/* ==================== Azure REST ==================== */
+function azBaseUrl(){
+  const sub=document.getElementById('azSub').value.trim(),rg=document.getElementById('azRg').value.trim(),f=document.getElementById('azFactory').value.trim();
+  return`https://management.azure.com/subscriptions/${encodeURIComponent(sub)}/resourceGroups/${encodeURIComponent(rg)}/providers/Microsoft.DataFactory/factories/${encodeURIComponent(f)}`;
+}
+function azHeaders(){
+  const t=document.getElementById('azToken').value.trim();
+  if(!t)throw new Error('Paste an Azure Management token first (expand Settings)');
+  return{'Authorization':'Bearer '+t,'Content-Type':'application/json'};
+}
+async function azFetch(method,path,body){
+  const r=await fetch(azBaseUrl()+path,{method,headers:azHeaders(),body:body?JSON.stringify(body):undefined});
+  if(!r.ok){let m=`HTTP ${r.status}`;try{const e=await r.json();m=e.error?.message||e.message||m}catch{}throw new Error(m)}
+  const t=await r.text();return t?JSON.parse(t):{};
+}
+function blobBaseUrl(){return`https://${document.getElementById('azStorage').value.trim()}.blob.core.windows.net/${document.getElementById('azContainer').value.trim()}`}
+function blobStorageUrl(){return`https://${document.getElementById('azStorage').value.trim()}.blob.core.windows.net`}
+function blobHeaders(){
+  const t=document.getElementById('azBlobToken').value.trim();
+  if(!t)throw new Error('Paste an Azure Storage token (see hint in Settings)');
+  return{'Authorization':'Bearer '+t,'x-ms-version':'2020-10-02'};
+}
+function corsErrorHtml(msg){
+  const isCors=(msg||'').match(/ERR_FAILED|NetworkError|Failed to fetch/i);
+  return isCors
+    ?'CORS error: Storage account blocks browser requests. Go to <b>Configure → Settings</b> and click <b>Enable CORS on Storage</b>, then retry.'
+    :'Error: '+esc(msg);
+}
+
+async function setCorsOnStorage(){
+  // Uses Azure Management API to set CORS on the storage account
+  const sub=document.getElementById('azSub').value.trim();
+  const rg=document.getElementById('azRg').value.trim();
+  const storage=document.getElementById('azStorage').value.trim();
+  const mgmtToken=document.getElementById('azToken').value.trim();
+  if(!sub||!rg||!storage||!mgmtToken){toast('Fill in Subscription, RG, Storage Account and ADF Token first');return}
+  try{
+    const url=`https://management.azure.com/subscriptions/${encodeURIComponent(sub)}/resourceGroups/${encodeURIComponent(rg)}/providers/Microsoft.Storage/storageAccounts/${encodeURIComponent(storage)}?api-version=2023-05-01`;
+    // First GET current properties
+    const getResp=await fetch(url,{headers:{'Authorization':'Bearer '+mgmtToken}});
+    if(!getResp.ok)throw new Error('GET storage account failed: HTTP '+getResp.status);
+    const acct=await getResp.json();
+    // PATCH to add CORS rule for blob service
+    const corsUrl=`https://management.azure.com/subscriptions/${encodeURIComponent(sub)}/resourceGroups/${encodeURIComponent(rg)}/providers/Microsoft.Storage/storageAccounts/${encodeURIComponent(storage)}/blobServices/default?api-version=2023-05-01`;
+    const body={properties:{cors:{corsRules:[{
+      allowedOrigins:['*'],allowedMethods:['GET','HEAD','OPTIONS'],
+      allowedHeaders:['Authorization','x-ms-version','x-ms-date','x-ms-blob-type','Content-Type'],
+      exposedHeaders:['x-ms-meta-*','Content-Length','Content-Type'],maxAgeInSeconds:3600
+    }]}}};
+    const putResp=await fetch(corsUrl,{method:'PUT',headers:{'Authorization':'Bearer '+mgmtToken,'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!putResp.ok){let m='HTTP '+putResp.status;try{const e=await putResp.json();m=e.error?.message||m}catch{}throw new Error(m)}
+    toast('CORS enabled on '+storage+'! Retry your request.');
+  }catch(e){toast('CORS setup failed: '+e.message)}
+}
+
+/* ==================== Batch REST ==================== */
+function batchEndpoint(){
+  const ep=document.getElementById('azBatchEndpoint').value.trim();
+  if(!ep)throw new Error('Set Batch Account Endpoint in Settings');
+  return ep.startsWith('https://')?ep:'https://'+ep;
+}
+function batchHeaders(){
+  const t=document.getElementById('azBatchToken').value.trim();
+  if(!t)throw new Error('Paste a Batch token in Settings (scope: https://batch.core.windows.net)');
+  return{'Authorization':'Bearer '+t,'Content-Type':'application/json','ocp-date':new Date().toUTCString()};
+}
+async function batchFetch(pathOrUrl){
+  let url;
+  if(pathOrUrl.startsWith('https://')){
+    url=pathOrUrl;
+    if(!url.includes('api-version='))url+=(url.includes('?')?'&':'?')+'api-version=2024-02-01.19.0';
+  }else{
+    const sep=pathOrUrl.includes('?')?'&':'?';
+    url=batchEndpoint()+pathOrUrl+sep+'api-version=2024-02-01.19.0';
+  }
+  const r=await fetch(url,{headers:batchHeaders()});
+  if(!r.ok){let m=`HTTP ${r.status}`;try{const e=await r.json();m=e.message?.value||e.code||m}catch{}throw new Error(m)}
+  return r;
+}
+
+/* ==================== Task Table ==================== */
+function initSelects(){
+  document.getElementById('bulkCat').innerHTML=CATEGORIES.map(c=>`<option value="${c}">${c||'AI decides'}</option>`).join('');
+  document.getElementById('bulkDiff').innerHTML=DIFFS.map(d=>`<option value="${d}">${d||'AI decides'}</option>`).join('');
+}
+function getExistingRepos(){
+  const s=new Set();
+  for(const tr of document.getElementById('taskBody').children){
+    const u=tr.querySelector('input[type=text]').value.trim().toLowerCase().replace(/\/+$/,'');
+    if(u)s.add(u);
+  }return s;
+}
+function bulkAdd(){
+  const raw=document.getElementById('bulkUrls').value;
+  let urls=raw.split(/[\n,]+/).map(s=>s.trim()).filter(s=>s);
+  if(!urls.length){alert('Paste at least one URL');return}
+  for(const tr of[...document.getElementById('taskBody').children])if(!tr.querySelector('input[type=text]').value.trim())tr.remove();
+  const seen=new Set();
+  urls=urls.filter(u=>{const k=u.toLowerCase().replace(/\/+$/,'');if(seen.has(k))return false;seen.add(k);return true});
+  const existing=getExistingRepos();
+  const fresh=urls.filter(u=>!existing.has(u.toLowerCase().replace(/\/+$/,'')));
+  const skip=urls.length-fresh.length;
+  const cat=document.getElementById('bulkCat').value,diff=document.getElementById('bulkDiff').value,num=parseInt(document.getElementById('bulkNum').value)||3;
+  for(const u of fresh)addRow(u,cat,diff,num);
+  document.getElementById('bulkUrls').value='';
+  toast(skip>0?`Added ${fresh.length}, skipped ${skip} dups`:`Added ${fresh.length} tasks`);
+}
+function addRow(repo='',cat='',diff='',num=3){
+  const catOpts=CATEGORIES.map(c=>`<option value="${c}">${c||'AI decides'}</option>`).join('');
+  const diffOpts=DIFFS.map(d=>`<option value="${d}">${d||'AI decides'}</option>`).join('');
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+    <td><input type="text" value="${repo}" placeholder="https://github.com/owner/repo"></td>
+    <td class="col-cat"><select>${catOpts}</select></td>
+    <td><select>${diffOpts}</select></td>
+    <td><input type="number" value="${num}" min="1" max="20"></td>
+    <td style="text-align:center"><button class="btn-del" onclick="this.closest('tr').remove();updateCount()">✕</button></td>`;
+  document.getElementById('taskBody').appendChild(tr);
+  if(cat)tr.querySelectorAll('select')[0].value=cat;
+  if(diff)tr.querySelectorAll('select')[1].value=diff;
+  updateCount();
+}
+function updateCount(){
+  const n=document.getElementById('taskBody').children.length;
+  document.getElementById('taskCount').textContent=n>0?`${n} tasks`:'';
+}
+function getTasks(){
+  const tasks=[];
+  for(const tr of document.getElementById('taskBody').children){
+    const repo=tr.querySelector('input[type=text]').value.trim();if(!repo)continue;
+    const cat=tr.querySelectorAll('select')[0].value,diff=tr.querySelectorAll('select')[1].value;
+    const num=parseInt(tr.querySelector('input[type=number]').value)||3;
+    const t={repo};if(cat)t.category=cat;if(diff)t.difficulty=diff;if(num!==3)t.num_cases=num;
+    tasks.push(t);
+  }return tasks;
+}
+
+/* ==================== Generate ==================== */
+function generate(){
+  const tasks=getTasks();
+  if(!tasks.length){alert('Add at least one task');return}
+  const expanded=[];
+  for(const t of tasks){const n=t.num_cases||3;for(let i=0;i<n;i++){
+    const item={repo:t.repo,case_index:i};if(t.category)item.category=t.category;if(t.difficulty)item.difficulty=t.difficulty;expanded.push(item);
+  }}
+  _expandedRepoList=expanded;
+  const totalCases=expanded.length;
+  const repoMap={};
+  for(const e of expanded){if(!repoMap[e.repo])repoMap[e.repo]={count:0,cat:e.category||'AI decides',diff:e.difficulty||'AI decides'};repoMap[e.repo].count++}
+  const repos=Object.keys(repoMap).length;
+
+  let html=`<div class="summary-grid">
+    <div class="stat-card"><div class="stat-val">${repos}</div><div class="stat-label">Repositories</div></div>
+    <div class="stat-card"><div class="stat-val">${totalCases}</div><div class="stat-label">Batch Nodes</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:var(--purple)">${document.getElementById('azModel').value.split('-').pop()}</div><div class="stat-label">Model</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:var(--orange)">${document.getElementById('azTimeout').value}s</div><div class="stat-label">Timeout</div></div>
+  </div>`;
+  html+=`<div style="overflow-x:auto"><table class="summary-table"><tr><th>Repository</th><th>Cases</th><th>Category</th><th>Difficulty</th></tr>`;
+  for(const[repo,info]of Object.entries(repoMap)){
+    html+=`<tr><td style="font-family:monospace;font-size:12px;color:var(--accent)">${esc(repo.replace('https://github.com/',''))}</td>
+      <td style="font-weight:600">${info.count}</td><td style="color:var(--muted);font-size:12px">${esc(info.cat)}</td>
+      <td style="color:var(--muted);font-size:12px">${esc(info.diff)}</td></tr>`;
+  }
+  html+='</table></div>';
+  html+=`<div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+    <button class="btn-copy" onclick="cpRepoList()">📋 Copy JSON</button>
+    <details style="flex:1"><summary style="cursor:pointer;font-size:11px;color:var(--muted)">Raw repo_list JSON</summary>
+    <pre style="margin-top:6px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:11px;overflow-x:auto;white-space:pre-wrap;color:var(--green);max-height:200px">${esc(JSON.stringify(expanded,null,2))}</pre>
+    </details></div>`;
+  document.getElementById('resultBody').innerHTML=html;
+  document.getElementById('resultPanel').classList.add('visible');
+  document.getElementById('btnTrigger').disabled=false;
+  toast('Plan generated — ready to trigger');
+}
+function cpRepoList(){if(!_expandedRepoList)return;navigator.clipboard.writeText(JSON.stringify(_expandedRepoList)).then(()=>toast('JSON copied!'))}
+
+function resetAll(){
+  document.getElementById('taskBody').innerHTML='';
+  document.getElementById('resultPanel').classList.remove('visible');
+  document.getElementById('btnTrigger').disabled=true;
+  const s=document.getElementById('triggerStatus');s.className='status-banner';s.innerHTML='';
+  _expandedRepoList=null;updateCount();addRow();
+  localStorage.removeItem(STORAGE_KEY);toast('Reset');
+}
+
+/* ==================== Trigger Pipeline ==================== */
+async function triggerPipeline(){
+  if(!_expandedRepoList?.length){alert('Generate first');return}
+  const el=document.getElementById('triggerStatus'),btn=document.getElementById('btnTrigger');
+  btn.disabled=true;
+  el.className='status-banner show';el.style.background='var(--surface2)';el.style.border='1px solid var(--border)';el.style.color='var(--muted)';
+  el.innerHTML='<span class="spin"></span> Triggering pipeline…';
+  try{
+    const params={repo_list:_expandedRepoList};
+    const gh=document.getElementById('azGhToken').value.trim();
+    if(gh){
+      if(gh.startsWith('{')||gh.startsWith('[')){
+        el.className='status-banner show err';el.style='';el.innerHTML='✕ GitHub Token looks like JSON (possibly pasted from token import). Please paste a raw ghp_xxx / github_pat_xxx token or leave it empty.';
+        btn.disabled=false;return;
+      }
+      params.github_token=gh;
+    }
+    const mo=document.getElementById('azModel').value.trim();if(mo)params.copilot_model=mo;
+    const to=document.getElementById('azTimeout').value.trim();if(to)params.copilot_timeout=to;
+    const data=await azFetch('POST',`/pipelines/${encodeURIComponent(document.getElementById('azPipeline').value.trim())}/createRun?api-version=2018-06-01`,params);
+    el.className='status-banner show ok';el.style='';
+    el.innerHTML=`✓ Pipeline triggered — Run ID: <code style="font-size:12px;color:var(--green);cursor:pointer" onclick="event.stopPropagation();copyText('${esc(data.runId)}','Run ID')">${esc(data.runId)}</code>
+      <button class="btn-copy" style="margin-left:8px" onclick="event.stopPropagation();copyText('${esc(data.runId)}','Run ID')">📋</button>`;
+    toast('Pipeline triggered!');
+    // Mark configure step done, switch to monitor
+    document.getElementById('step-configure').classList.add('done');
+    document.getElementById('conn-1').classList.add('done');
+    setTimeout(()=>{goStep('monitor');refreshMonitor()},1500);
+  }catch(e){el.className='status-banner show err';el.style='';el.innerHTML=`✕ ${esc(e.message)}`}
+  finally{btn.disabled=false}
+}
+
+/* ==================== Pipeline Runs ==================== */
+async function fetchRuns(kind='generate'){
+  const pipelineName=getPipelineName(kind);
+  if(!pipelineName)return[];
+  const data=await azFetch('POST','/queryPipelineRuns?api-version=2018-06-01',{
+    lastUpdatedAfter:new Date(Date.now()-7*86400000).toISOString(),
+    lastUpdatedBefore:new Date(Date.now()+86400000).toISOString(),
+    filters:[{operand:'PipelineName',operator:'Equals',values:[pipelineName]}],
+    orderBy:[{orderBy:'RunStart',order:'DESC'}]
+  });
+  return (data.value||[]).map(run=>({...run,__kind:kind,__pipelineName:pipelineName}));
+}
+
+function getRunWorkload(run){
+  return run.parameters?.repo_list
+    ?(()=>{try{return JSON.parse(run.parameters.repo_list).length+' cases'}catch{return'? cases'}})()
+    :(run.parameters?.audit_level?`level ${run.parameters.audit_level}`:(run.parameters?.input_folder?'audit run':'-'));
+}
+
+function getRunDurationSeconds(run){
+  if(!run.runStart)return 0;
+  return Math.max(0, Math.floor(((run.runEnd?new Date(run.runEnd):new Date()) - new Date(run.runStart))/1000));
+}
+
+function renderCombinedRuns(){
+  syncMonitorLabels();
+  const el=document.getElementById('runsContent');
+  const detail=document.getElementById('activityDetailMonitor');
+  const pipelineFilter=document.getElementById('monitorPipelineFilter')?.value||'all';
+  const statusFilter=document.getElementById('monitorStatusFilter')?.value||'all';
+  const sortMode=document.getElementById('monitorSort')?.value||'start-desc';
+  const query=(document.getElementById('monitorSearch')?.value||'').trim().toLowerCase();
+  const combined=[...(_runsCache.generate||[]),...(_runsCache.audit||[])];
+  if(!combined.length){el.innerHTML='<p class="empty">No pipeline runs loaded yet</p>';detail.innerHTML='';return}
+
+  let rows=combined.filter(run=>{
+    if(pipelineFilter!=='all' && run.__kind!==pipelineFilter)return false;
+    if(statusFilter!=='all' && (run.status||'')!==statusFilter)return false;
+    if(query){
+      const haystack=`${run.runId||''} ${run.__pipelineName||''} ${run.__kind||''}`.toLowerCase();
+      if(!haystack.includes(query))return false;
+    }
+    return true;
+  });
+
+  rows.sort((a,b)=>{
+    switch(sortMode){
+      case 'start-asc': return new Date(a.runStart||0)-new Date(b.runStart||0);
+      case 'duration-desc': return getRunDurationSeconds(b)-getRunDurationSeconds(a);
+      case 'duration-asc': return getRunDurationSeconds(a)-getRunDurationSeconds(b);
+      case 'pipeline': return (a.__pipelineName||'').localeCompare(b.__pipelineName||'');
+      case 'status': return (a.status||'').localeCompare(b.status||'');
+      default: return new Date(b.runStart||0)-new Date(a.runStart||0);
+    }
+  });
+
+  let h=`<div class="monitor-summary">Loaded ${combined.length} runs across ${Object.values(RUN_TYPES).filter(t=>getPipelineName(t===RUN_TYPES.generate?'generate':'audit')).length||2} configured pipelines. Showing ${rows.length} after filters.</div>`;
+  h+=`<table class="rtable"><tr><th>Pipeline</th><th>Run ID</th><th>Status</th><th>Started</th><th>Duration</th><th>Workload</th><th>Batch</th><th></th></tr>`;
+  for(const run of rows.slice(0,50)){
+    const kind=run.__kind;
+    const cfg=getRunType(kind);
+    const cancel=(run.status==='InProgress'||run.status==='Queued')
+      ?`<button class="btn-del" style="color:var(--red)" onclick="event.stopPropagation();cancelRun('${run.runId}','${kind}')">Cancel</button>`:'';
+    h+=`<tr>
+      <td><span class="badge ${cfg.badgeClass}">${esc(run.__pipelineName||cfg.label)}</span></td>
+      <td><span style="font-family:monospace;color:var(--accent);font-size:11px;word-break:break-all" title="${esc(run.runId||'')}">${esc(run.runId||'')}</span>
+        <button class="btn-copy" onclick="event.stopPropagation();copyText('${esc(run.runId||'')}','Run ID')" title="Copy Run ID">📋</button></td>
+      <td>${statusBadge(run.status)}</td>
+      <td style="font-size:11px">${fmtTime(run.runStart)}</td>
+      <td style="font-size:11px">${fmtDuration(run.runStart,run.runEnd)}</td>
+      <td style="font-size:11px;color:var(--muted)">${esc(getRunWorkload(run))}</td>
+      <td><button class="btn-open-batch" onclick="openBatchForRun('${run.runId}','${kind}')" title="Open matching Batch tasks for this run">Open Batch</button></td>
+      <td>${cancel}<button class="btn-copy" onclick="event.stopPropagation();copyText(JSON.stringify(${esc(JSON.stringify(run))},null,2),'Run JSON')" title="Copy run details">{ }</button></td>
+    </tr>`;
+  }
+  h+='</table>';
+  if(rows.length>50)h+=`<p style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center">Showing 50 of ${rows.length}</p>`;
+  el.innerHTML=h;
+}
+
+function openActivitiesForRun(runId,kind='generate'){
+  const detail=document.getElementById('activityDetailMonitor');
+  if(detail){
+    detail.innerHTML=`<div class="act-panel"><div class="act-head"><span class="spin"></span> Loading activities for <code style="color:var(--accent)">${esc((runId||'').substring(0,8))}…</code></div></div>`;
+    detail.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  loadActivities(runId,kind);
+}
+
+async function openBatchForRun(runId,kind='generate'){
+  const cfg=getRunType(kind);
+  const batchLink=document.getElementById('batchLinkStatus');
+  if(batchLink){
+    setBatchLinkStatus(`<span class="spin"></span> Listing currently running Batch tasks in the selected pool for ${esc(cfg.label)} ${esc((runId||'').substring(0,8))}…`,false);
+    batchLink.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  try{
+    clearBatchLinks();
+    await renderActiveBatchTasksFallback(`${cfg.label} ${runId.substring(0,8)}…`);
+    setBatchLinkStatus(`Showing all currently running Batch tasks in the selected pool for ${esc(cfg.label)} ${esc((runId||'').substring(0,8))}….`,false);
+  }catch(e){
+    setBatchLinkStatus(`Failed to open Batch view for ${esc(cfg.label)} ${esc((runId||'').substring(0,8))}…: ${esc(e.message)}`,true);
+  }
+}
+
+async function loadActivities(runId,kind='generate'){
+  const cfg=getRunType(kind);
+  const el=document.getElementById('activityDetailMonitor');
+  el.innerHTML=`<div class="act-panel"><div class="act-head"><span class="spin"></span> Loading activities…</div></div>`;
+  try{
+    const data=await azFetch('POST',`/pipelineruns/${encodeURIComponent(runId)}/queryActivityruns?api-version=2018-06-01`,
+      {lastUpdatedAfter:'2024-01-01T00:00:00Z',lastUpdatedBefore:new Date(Date.now()+86400000).toISOString()});
+    const acts=data.value||[];
+    _activityCache[`${kind}:${runId}`]=acts;
+    if(!acts.length){el.innerHTML='<div class="act-panel"><div class="act-head">No activities</div></div>';return}
+
+    // Progress summary
+    let nS=0,nF=0,nR=0,nQ=0;
+    for(const a of acts){
+      const s=(a.status||'').toLowerCase();
+      if(s==='succeeded')nS++;else if(s==='failed')nF++;else if(s==='inprogress')nR++;else nQ++;
+    }
+    const total=acts.length, pctDone=total?Math.round((nS+nF)/total*100):0;
+    const barColor=nF>0?`linear-gradient(90deg,var(--green) ${nS/total*100}%,var(--red) ${nS/total*100}% ${(nS+nF)/total*100}%,var(--surface3) ${(nS+nF)/total*100}%)`
+      :`linear-gradient(90deg,var(--green) ${pctDone}%,var(--surface3) ${pctDone}%)`;
+
+    let h=`<div class="act-panel">
+      <div class="act-head">
+        <span style="flex:1">${esc(cfg.label)} activities — <code style="color:var(--accent);cursor:pointer" onclick="copyText('${esc(runId)}','Run ID')">${esc(runId.substring(0,8))}…</code>
+          <button class="btn-copy" onclick="copyText('${esc(runId)}','Run ID')">📋</button></span>
+        <div class="act-progress">
+          ${nS?`<span class="ap-s">✓ ${nS}</span>`:''}
+          ${nF?`<span class="ap-f">✕ ${nF}</span>`:''}
+          ${nR?`<span class="ap-r">◐ ${nR}</span>`:''}
+          ${nQ?`<span class="ap-q">○ ${nQ}</span>`:''}
+          <span style="color:var(--text-sec)">${pctDone}%</span>
+        </div>
+      </div>
+      <div style="padding:0 16px 0"><div class="progress-bar"><div class="progress-fill" style="width:${pctDone}%;background:${barColor}"></div></div></div>
+      <table class="act-table"><tr><th>Name</th><th>Status</th><th>Duration</th><th>Batch Task</th><th>Error</th><th>Batch / Actions</th></tr>`;
+
+    for(let i=0;i<acts.length;i++){
+      const a=acts[i];
+      const err=a.error?.message||'';
+      // Try to extract batch task ID from output
+      let batchTaskId='-';
+      try{
+        if(a.output?.executionDetails?.length){batchTaskId=a.output.executionDetails[0].taskId||'-'}
+      }catch{}
+      const exitCode=a.output?.exitcode;
+      const exitBadge=exitCode!==undefined?`<span style="font-size:10px;color:${exitCode===0?'var(--green)':'var(--red)'}"> (exit:${exitCode})</span>`:'';
+
+      h+=`<tr>
+        <td style="font-size:11px">${esc(a.activityName||'-')}</td>
+        <td>${statusBadge(a.status)}${exitBadge}</td>
+        <td style="font-size:11px">${fmtDuration(a.activityRunStart,a.activityRunEnd)}</td>
+        <td>${batchTaskId!=='-'?`<span class="batch-tid">${esc(batchTaskId)}</span> <button class="btn-copy" onclick="event.stopPropagation();copyText('${esc(batchTaskId)}','Task ID')">📋</button>`:`<span style="color:var(--muted)">-</span>`}</td>
+        <td>${err?`<span class="err-text" title="${esc(err)}">${esc(err.substring(0,120))}${err.length>120?'…':''}</span> <button class="btn-copy" onclick="event.stopPropagation();copyText(\`${esc(err.replace(/`/g,"'"))}\`,'Error')">📋</button>`:'<span style="color:var(--muted)">-</span>'}</td>
+        <td class="act-actions">
+          <button class="btn-open-batch" onclick="event.stopPropagation();openBatchForActivity(${i},'${esc(runId)}','${kind}')" title="Open matching Batch tasks">Open Batch</button>
+          <button class="btn-log json" onclick="event.stopPropagation();viewActivityOutput(${i},'${esc(runId)}','${kind}')" title="View full output JSON">{ }</button>
+          ${err?`<button class="btn-log stderr" onclick="event.stopPropagation();copyText(\`${esc(err.replace(/`/g,"'"))}\`,'Error')" title="Copy error">⚠</button>`:''}
+        </td></tr>`;
+    }
+    h+='</table></div>';
+    el.innerHTML=h;
+    linkBatchArtifactsForActivities(acts, `${cfg.label} ${runId.substring(0,8)}…`);
+  }catch(e){el.innerHTML=`<div class="act-panel"><div class="act-head" style="color:var(--red)">Error: ${esc(e.message)}</div></div>`}
+}
+
+function viewActivityOutput(idx,runId,kind='generate'){
+  const acts=_activityCache[`${kind}:${runId}`];
+  if(!acts||!acts[idx])return;
+  const a=acts[idx];
+  const title=`Output — ${a.activityName||'Activity '+idx}`;
+  const content=JSON.stringify(a.output||{},null,2);
+  openModal(title,content);
+}
+
+async function openBatchForActivity(idx,runId,kind='generate'){
+  const acts=_activityCache[`${kind}:${runId}`];
+  if(!acts||!acts[idx])return;
+  const activity=acts[idx];
+  const cfg=getRunType(kind);
+  const sourceLabel=`${cfg.label} ${runId.substring(0,8)}… / ${activity.activityName||('Activity '+idx)}`;
+  await linkBatchArtifactsForActivities([activity], sourceLabel);
+  const batchLink=document.getElementById('batchLinkStatus');
+  if(batchLink){
+    batchLink.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+}
+
+async function cancelRun(runId,kind='generate'){
+  if(!confirm('Cancel this run?'))return;
+  try{await azFetch('POST',`/pipelineruns/${encodeURIComponent(runId)}/cancel?api-version=2018-06-01`);toast('Cancel requested');setTimeout(refreshMonitor,1500)}
+  catch(e){alert('Failed: '+e.message)}
+}
+
+function toggleAutoRefresh(){
+  if(document.getElementById('autoRefresh').checked){refreshMonitor();_autoRefreshTimer=setInterval(refreshMonitor,15000)}
+  else{if(_autoRefreshTimer){clearInterval(_autoRefreshTimer);_autoRefreshTimer=null}}
+}
+
+async function refreshMonitor(){
+  syncMonitorLabels();
+  const el=document.getElementById('runsContent');
+  el.innerHTML='<p class="empty"><span class="spin"></span> Loading…</p>';
+  try{
+    const [generateRuns,auditRuns]=await Promise.all([fetchRuns('generate'),fetchRuns('audit')]);
+    _runsCache.generate=generateRuns;
+    _runsCache.audit=auditRuns;
+    renderCombinedRuns();
+  }catch(e){el.innerHTML=`<p class="empty" style="color:var(--red)">Error: ${esc(e.message)}</p>`}
+}
+
+/* ==================== Batch Explorer ==================== */
+let _batchJobsCache=[];
+let _batchSearchQuery='';
+let _batchSearchMatchedJobIds=null;
+
+function renderBatchJobs(){
+  const el=document.getElementById('batchJobsContent');
+  if(!el)return;
+  const jobs=_batchJobsCache;
+  if(!jobs||!jobs.length){el.innerHTML='<p class="empty">No Batch jobs found</p>';return}
+
+  // Sort jobs by creation time descending (newest first)
+  let filtered=jobs.slice();
+  if(_linkedBatchJobIds.size && !_batchSearchQuery)filtered=filtered.filter(job=>_linkedBatchJobIds.has(job.id||''));
+  if(_batchSearchMatchedJobIds && _batchSearchQuery)filtered=filtered.filter(job=>_batchSearchMatchedJobIds.has(job.id||''));
+  filtered.sort((a,b)=>new Date(b.creationTime||0)-new Date(a.creationTime||0));
+
+  let summary=(_linkedBatchJobIds.size && !_batchSearchQuery)?`Showing Batch jobs linked to ${esc(_linkedBatchSource||'the selected run')}.`:'Showing recent Batch jobs for the selected pool.';
+  if(_batchSearchQuery)summary+=` Search: <code>${esc(_batchSearchQuery)}</code>.`;
+  let h=`<div class="monitor-summary">${summary}</div>`;
+  h+=`<table class="batch-jobs-table"><tr><th>Job ID</th><th>State</th><th>Created</th><th>Pool</th><th></th></tr>`;
+  if(!filtered.length){
+    h+=`<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:16px">No jobs found</td></tr>`;
+  }
+  for(const j of filtered){
+    const jid=j.id||'';
+    const shortId=jid.length>32?jid.substring(0,32)+'…':jid;
+    const linkedCount=(_linkedBatchMatchMap[jid]&&_linkedBatchMatchMap[jid].size)||0;
+    const isLinked=_linkedBatchJobIds.has(jid);
+    const rowStyle=isLinked?'background:rgba(0,120,212,.08);outline:1px solid rgba(0,120,212,.25)':'';
+    h+=`<tr class="clickable" onclick="loadBatchTasks('${esc(jid)}')">
+      <td style="${rowStyle}"><span style="font-family:monospace;font-size:11px;color:var(--cyan)" title="${esc(jid)}">${esc(shortId)}</span>
+        ${linkedCount?` <span style="font-size:10px;color:var(--accent);font-weight:700">+${linkedCount} linked</span>`:''}
+        <button class="btn-copy" onclick="event.stopPropagation();copyText('${esc(jid)}','Job ID')">📋</button></td>
+      <td style="${rowStyle}">${statusBadge(j.state||'unknown')}</td>
+      <td style="${rowStyle};font-size:11px">${fmtTime(j.creationTime)}</td>
+      <td style="${rowStyle};font-size:11px;color:var(--muted)">${esc(j.poolInfo?.poolId||'-')}</td>
+      <td style="${rowStyle}"><button class="btn-sm" onclick="event.stopPropagation();loadBatchTasks('${esc(jid)}')">Tasks →</button></td>
+    </tr>`;
+  }
+  h+='</table>';
+  el.innerHTML=h;
+}
+
+let _batchTasksCache={};
+let _taskSortMode='id-asc';
+let _taskUuidFilter='';
+
+function classifyTask(t){
+  const s=(t.state||'').toLowerCase();
+  if(s==='running')return 'running';
+  if(s==='completed'){return (t.executionInfo?.exitCode===0)?'succeeded':'failed'}
+  if(s==='active'||s==='preparing')return 'pending';
+  return 'other';
+}
+
+function renderBatchTasks(jobId,filter,sortMode,uuidFilter){
+  if(sortMode!==undefined) _taskSortMode=sortMode;
+  if(uuidFilter!==undefined) _taskUuidFilter=uuidFilter;
+  const el=document.getElementById('batchTasksDetail');
+  const tasks=_batchTasksCache[jobId];
+  if(!tasks)return;
+  _activeBatchJobId=jobId;
+
+  // Counts
+  let nS=0,nF=0,nR=0,nP=0;
+  for(const t of tasks){const c=classifyTask(t);if(c==='succeeded')nS++;else if(c==='failed')nF++;else if(c==='running')nR++;else nP++}
+  const pct=tasks.length?Math.round((nS+nF)/tasks.length*100):0;
+
+  // Status filter
+  let filtered=filter==='all'?tasks.slice():tasks.filter(t=>classifyTask(t)===filter);
+
+  // UUID / ID text filter
+  const uf=(_taskUuidFilter||'').trim().toLowerCase();
+  if(uf) filtered=filtered.filter(t=>(t.id||'').toLowerCase().includes(uf));
+
+  // Sort
+  filtered.sort((a,b)=>{
+    switch(_taskSortMode){
+      case 'id-desc': return (b.id||'').localeCompare(a.id||'',undefined,{numeric:true});
+      case 'time-desc':{
+        const at=a.executionInfo?.startTime||a.creationTime||'';
+        const bt=b.executionInfo?.startTime||b.creationTime||'';
+        return new Date(bt||0)-new Date(at||0);}
+      case 'time-asc':{
+        const at2=a.executionInfo?.startTime||a.creationTime||'';
+        const bt2=b.executionInfo?.startTime||b.creationTime||'';
+        return new Date(at2||0)-new Date(bt2||0);}
+      case 'state': return classifyTask(a).localeCompare(classifyTask(b));
+      case 'exit':{
+        const ea=a.executionInfo?.exitCode??999;const eb=b.executionInfo?.exitCode??999;
+        return ea-eb;}
+      default: return (a.id||'').localeCompare(b.id||'',undefined,{numeric:true});
+    }
+  });
+
+  const btnStyle=(f)=>`cursor:pointer;padding:3px 10px;border-radius:10px;font-size:11px;border:1px solid var(--border);background:${filter===f?'var(--accent)':'var(--surface2)'};color:${filter===f?'#fff':'var(--text-sec)'}`;
+  let h=`<div class="batch-tasks-panel">
+    <div class="batch-tasks-head">
+      <span style="flex:1">Tasks — <code style="color:var(--cyan);cursor:pointer" onclick="copyText('${esc(jobId)}','Job ID')">${esc(jobId.length>30?jobId.substring(0,30)+'…':jobId)}</code>
+        <button class="btn-copy" onclick="copyText('${esc(jobId)}','Job ID')">📋</button></span>
+      <span style="font-size:11px;color:var(--muted)">${tasks.length} tasks &middot; ${pct}% done</span>
+    </div>
+    <div style="display:flex;gap:6px;padding:8px 12px;flex-wrap:wrap;align-items:center">
+      <span style="${btnStyle('all')}" onclick="renderBatchTasks('${esc(jobId)}','all','${esc(_taskSortMode)}','${esc(_taskUuidFilter)}')">All (${tasks.length})</span>
+      <span style="${btnStyle('failed')}" onclick="renderBatchTasks('${esc(jobId)}','failed','${esc(_taskSortMode)}','${esc(_taskUuidFilter)}')">❌ Failed (${nF})</span>
+      <span style="${btnStyle('running')}" onclick="renderBatchTasks('${esc(jobId)}','running','${esc(_taskSortMode)}','${esc(_taskUuidFilter)}')">🔄 Running (${nR})</span>
+      <span style="${btnStyle('succeeded')}" onclick="renderBatchTasks('${esc(jobId)}','succeeded','${esc(_taskSortMode)}','${esc(_taskUuidFilter)}')">✅ Succeeded (${nS})</span>
+      <span style="${btnStyle('pending')}" onclick="renderBatchTasks('${esc(jobId)}','pending','${esc(_taskSortMode)}','${esc(_taskUuidFilter)}')">⏳ Pending (${nP})</span>
+      <span style="flex:1"></span>
+      <label style="font-size:11px;color:var(--muted)">Sort:</label>
+      <select id="taskSort" style="font-size:11px;padding:3px 6px" onchange="renderBatchTasks('${esc(jobId)}','${esc(filter)}',this.value,document.getElementById('taskUuidFilter').value)">
+        <option value="id-asc" ${_taskSortMode==='id-asc'?'selected':''}>ID ↑ (A→Z)</option>
+        <option value="id-desc" ${_taskSortMode==='id-desc'?'selected':''}>ID ↓ (Z→A)</option>
+        <option value="time-desc" ${_taskSortMode==='time-desc'?'selected':''}>Time ↓ (newest)</option>
+        <option value="time-asc" ${_taskSortMode==='time-asc'?'selected':''}>Time ↑ (oldest)</option>
+        <option value="state" ${_taskSortMode==='state'?'selected':''}>State</option>
+        <option value="exit" ${_taskSortMode==='exit'?'selected':''}>Exit Code</option>
+      </select>
+      <input id="taskUuidFilter" placeholder="Filter Task ID…" value="${esc(_taskUuidFilter)}" style="width:180px;font-size:11px;padding:4px 8px" oninput="renderBatchTasks('${esc(jobId)}','${esc(filter)}',document.getElementById('taskSort').value,this.value)">
+      <span style="font-size:11px;color:var(--muted)">${filtered.length}/${tasks.length}</span>
+    </div>
+    <table class="act-table"><tr><th>Task ID</th><th>State</th><th>Exit</th><th>Duration</th><th>Logs</th></tr>`;
+
+  if(!filtered.length){
+    h+=`<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:16px">No tasks match filter</td></tr>`;
+  }
+  for(const t of filtered){
+    const tid=t.id||'';
+    const ei=t.executionInfo||{};
+    const exitCode=ei.exitCode;
+    const exitColor=exitCode===0?'var(--green)':exitCode!==undefined?'var(--red)':'var(--muted)';
+    const isLinked=!!_linkedBatchMatchMap[jobId]?.has(tid);
+    const rowStyle=isLinked?'background:rgba(0,120,212,.08);outline:1px solid rgba(0,120,212,.25)':'';
+
+    h+=`<tr>
+      <td style="${rowStyle}"><span style="font-family:monospace;font-size:11px;color:var(--cyan)">${esc(tid)}</span>${isLinked?` <span style="font-size:10px;color:var(--accent);font-weight:700">linked</span>`:''}
+        <button class="btn-copy" onclick="copyText('${esc(tid)}','Task ID')">📋</button></td>
+      <td style="${rowStyle}">${statusBadge(t.state)}</td>
+      <td style="${rowStyle};font-family:monospace;font-size:11px;color:${exitColor}">${exitCode!==undefined?exitCode:'-'}</td>
+      <td style="${rowStyle};font-size:11px">${fmtDuration(ei.startTime,ei.endTime)}</td>
+      <td class="act-actions" style="${rowStyle}">
+        <button class="btn-log stdout" onclick="viewBatchFile('${esc(jobId)}','${esc(tid)}','stdout.txt')">stdout</button>
+        <button class="btn-log stderr" onclick="viewBatchFile('${esc(jobId)}','${esc(tid)}','stderr.txt')">stderr</button>
+      </td></tr>`;
+  }
+  h+='</table></div>';
+  el.innerHTML=h;
+}
+
+async function loadBatchTasks(jobId){
+  const el=document.getElementById('batchTasksDetail');
+  el.innerHTML=`<div class="batch-tasks-panel"><div class="batch-tasks-head"><span class="spin"></span> Loading tasks for ${esc(jobId.substring(0,24))}…</div></div>`;
+  try{
+    const tasks=await fetchBatchTasks(jobId);
+    if(!tasks.length){el.innerHTML=`<div class="batch-tasks-panel"><div class="batch-tasks-head">No tasks in job</div></div>`;return}
+
+    // Reset task filters for new job
+    _taskSortMode='id-asc';
+    _taskUuidFilter='';
+    _batchTasksCache[jobId]=tasks;
+
+    // Default: show failed first, else all
+    const hasFailures=tasks.some(t=>classifyTask(t)==='failed');
+    renderBatchTasks(jobId,hasFailures?'failed':'all',_taskSortMode,_taskUuidFilter);
+  }catch(e){el.innerHTML=`<div class="batch-tasks-panel"><div class="batch-tasks-head" style="color:var(--red)">Error: ${esc(e.message)}</div></div>`}
+}
+
+let _modalSource=null; // {jobId,taskId,filename} for refresh
+
+async function viewBatchFile(jobId,taskId,filename){
+  _modalSource={jobId,taskId,filename};
+  openModal(`${filename} — ${taskId}`,'Loading…',true);
+  try{
+    const resp=await batchFetch(`/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}/files/${encodeURIComponent(filename)}`);
+    const text=await resp.text();
+    document.getElementById('logModalContent').textContent=text||'(empty)';
+  }catch(e){document.getElementById('logModalContent').textContent='Error: '+e.message}
+}
+
+async function refreshModal(){
+  if(!_modalSource)return;
+  const{jobId,taskId,filename}=_modalSource;
+  document.getElementById('logModalContent').textContent='Refreshing…';
+  try{
+    const resp=await batchFetch(`/jobs/${encodeURIComponent(jobId)}/tasks/${encodeURIComponent(taskId)}/files/${encodeURIComponent(filename)}`);
+    const text=await resp.text();
+    document.getElementById('logModalContent').textContent=text||'(empty)';
+    toast('Refreshed');
+  }catch(e){document.getElementById('logModalContent').textContent='Error: '+e.message}
+}
+
+/* ==================== Modal ==================== */
+function openModal(title,content,showRefresh){
+  document.getElementById('logModalTitle').textContent=title;
+  document.getElementById('logModalContent').textContent=content;
+  document.getElementById('modalRefreshBtn').style.display=showRefresh?'':'none';
+  document.getElementById('logModal').classList.add('show');
+  document.body.style.overflow='hidden';
+}
+function closeModal(){
+  document.getElementById('logModal').classList.remove('show');
+  document.body.style.overflow='';
+  _modalSource=null;
+}
+function copyModalContent(){
+  const text=document.getElementById('logModalContent').textContent;
+  navigator.clipboard.writeText(text).then(()=>toast('Content copied!'));
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+
+/* ==================== Blob Results ==================== */
+async function refreshBlobs(){
+  const el=document.getElementById('blobContent'),preview=document.getElementById('blobPreview');
+  preview.innerHTML='';el.innerHTML='<p class="empty"><span class="spin"></span> Listing blobs…</p>';
+  try{
+    const folder=document.getElementById('azOutputFolder').value.trim();
+    const sub=document.getElementById('blobSubfolder').value;
+    const prefix=folder+'/'+sub+'/';
+    const url=blobBaseUrl()+`?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&delimiter=`;
+    const resp=await fetch(url,{headers:blobHeaders()});
+    if(!resp.ok){let m=`HTTP ${resp.status}`;try{m=await resp.text()}catch{}throw new Error(m)}
+    const xml=await resp.text();const parser=new DOMParser();const doc=parser.parseFromString(xml,'text/xml');
+    const blobs=doc.querySelectorAll('Blob');
+    if(!blobs.length){el.innerHTML='<p class="empty">No files found in '+esc(prefix)+'</p>';return}
+    const items=[];
+    blobs.forEach(b=>{
+      const name=b.querySelector('Name')?.textContent||'';
+      const size=parseInt(b.querySelector('Content-Length')?.textContent||'0');
+      const modified=b.querySelector('Last-Modified')?.textContent||'';
+      items.push({name,size,modified,shortName:name.replace(prefix,'')});
+    });
+    items.sort((a,b)=>new Date(b.modified)-new Date(a.modified));
+
+    let h=`<div style="font-size:11px;color:var(--muted);padding:6px 0 8px">${items.length} files in <code>${esc(prefix)}</code></div>`;
+    for(const f of items){
+      const isJsonl=f.shortName.endsWith('.jsonl');
+      h+=`<div class="blob-file" ${isJsonl?`style="cursor:pointer" onclick="previewBlob('${f.name.replace(/'/g,"\\'")}')"`:''}>
+        <span class="blob-icon">${isJsonl?'📋':'📦'}</span>
+        <span class="blob-name">${esc(f.shortName)}</span>
+        <span class="blob-size">${fmtBytes(f.size)}</span>
+        <span class="blob-size">${fmtTime(f.modified)}</span>
+        <button class="btn-copy" onclick="event.stopPropagation();copyText('${f.name.replace(/'/g,"\\'")}','File path')">📋</button>
+        ${isJsonl?`<button class="btn-sm" onclick="event.stopPropagation();previewBlob('${f.name.replace(/'/g,"\\'")}')">View</button>`:''}
+      </div>`;
+    }
+    el.innerHTML=h;
+  }catch(e){el.innerHTML=`<p class="empty" style="color:var(--red)">${corsErrorHtml(e.message)}</p>`}
+}
+
+async function previewBlob(blobName){
+  const el=document.getElementById('blobPreview');
+  el.innerHTML=`<div class="blob-preview"><span class="spin"></span> Loading…</div>`;
+  try{
+    const url=blobBaseUrl()+'/'+encodeURIComponent(blobName).replace(/%2F/g,'/');
+    const resp=await fetch(url,{headers:blobHeaders()});
+    if(!resp.ok)throw new Error(`HTTP ${resp.status}`);
+    const text=await resp.text();
+    let display=text;
+    if(blobName.endsWith('.jsonl')){try{display=text.trim().split('\n').map(line=>JSON.stringify(JSON.parse(line),null,2)).join('\n\n---\n\n')}catch{}}
+    el.innerHTML=`<div class="blob-preview">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-weight:600;font-size:12px;color:var(--accent);flex:1">${esc(blobName.split('/').pop())}</span>
+        <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('blobText').textContent);toast('Content copied!')">📋 Copy</button>
+        <button class="btn-sm" onclick="openModal('${esc(blobName.split('/').pop())}',document.getElementById('blobText').textContent)">⤢ Expand</button>
+      </div>
+      <pre id="blobText">${esc(display)}</pre>
+    </div>`;
+  }catch(e){el.innerHTML=`<div class="blob-preview"><p style="color:var(--red)">${corsErrorHtml(e.message)}</p></div>`}
+}
+
+/* ==================== Token Import ==================== */
+async function importTokens(){
+  try{
+    const text=await navigator.clipboard.readText();
+    if(!text?.trim()){toast('Clipboard is empty');return}
+    let data;
+    try{data=JSON.parse(text)}catch{toast('Clipboard is not valid JSON');return}
+    let count=0;
+    for(const f of['azToken','azBlobToken','azBatchToken','azBatchEndpoint']){
+      if(data[f]){const el=document.getElementById(f);if(el){el.value=data[f];count++}}
+    }
+    if(count>0){toast(`Imported ${count} fields`);saveState()}else{toast('No matching fields found')}
+  }catch(e){toast('Clipboard: '+e.message)}
+}
+
+/* ==================== Audit ==================== */
+let _auditCases=[]; // [{name,shortName,size,modified,selected,data}]
+
+async function loadAuditCases(){
+  const el=document.getElementById('auditCasesContent');
+  el.innerHTML='<p class="empty"><span class="spin"></span> Loading JSONL files…</p>';
+  try{
+    const folder=document.getElementById('azOutputFolder').value.trim();
+    const prefix=folder+'/jsonl/';
+    const url=blobBaseUrl()+`?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&delimiter=`;
+    const resp=await fetch(url,{headers:blobHeaders()});
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    const xml=await resp.text();const parser=new DOMParser();const doc=parser.parseFromString(xml,'text/xml');
+    const blobs=doc.querySelectorAll('Blob');
+    if(!blobs.length){el.innerHTML='<p class="empty">No JSONL files found in '+esc(prefix)+'</p>';return}
+    _auditCases=[];
+    blobs.forEach(b=>{
+      const name=b.querySelector('Name')?.textContent||'';
+      const size=parseInt(b.querySelector('Content-Length')?.textContent||'0');
+      const modified=b.querySelector('Last-Modified')?.textContent||'';
+      if(name.endsWith('.jsonl'))_auditCases.push({name,shortName:name.replace(prefix,''),size,modified,selected:true,data:null});
+    });
+    _auditCases.sort((a,b)=>new Date(b.modified)-new Date(a.modified));
+    renderAuditCases();
+  }catch(e){el.innerHTML=`<p class="empty" style="color:var(--red)">${corsErrorHtml(e.message)}</p>`}
+}
+
+function renderAuditCases(){
+  const el=document.getElementById('auditCasesContent');
+  const nSel=_auditCases.filter(c=>c.selected).length;
+  let h=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+    <span style="font-size:12px;color:var(--muted)">${_auditCases.length} files, ${nSel} selected</span>
+    <button class="btn-sm" onclick="_auditCases.forEach(c=>c.selected=true);renderAuditCases()">Select All</button>
+    <button class="btn-sm" onclick="_auditCases.forEach(c=>c.selected=false);renderAuditCases()">Select None</button>
+  </div>`;
+  h+=`<div style="max-height:350px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--r)">`;
+  _auditCases.forEach((c,i)=>{
+    const chk=c.selected?'checked':'';
+    h+=`<div class="blob-file" style="cursor:pointer" onclick="toggleAuditCase(${i})">
+      <input type="checkbox" ${chk} onclick="event.stopPropagation();toggleAuditCase(${i})" style="margin-right:4px">
+      <span class="blob-icon">📋</span>
+      <span class="blob-name">${esc(c.shortName)}</span>
+      <span class="blob-size">${fmtBytes(c.size)}</span>
+      <span class="blob-size">${fmtTime(c.modified)}</span>
+      ${c.data?'<span style="color:var(--green);font-size:10px;font-weight:600">✓ loaded</span>':''}
+    </div>`;
+  });
+  h+='</div>';
+  el.innerHTML=h;
+}
+
+function toggleAuditCase(idx){
+  _auditCases[idx].selected=!_auditCases[idx].selected;
+  renderAuditCases();
+}
+
+/* -- In-browser Quick Audit (L1/L5/L6) -- */
+const AUDIT_REQUIRED_FIELDS=["instance_id","repo","base_commit","workspace_dir","source","issue_text","patches","fail_to_pass","labels","quality"];
+const AUDIT_VALID_CATEGORIES=new Set(["Logic & Algorithm","Data Handling & Transformation","API & Interface Contract","Error Handling & Edge Cases","Infrastructure & Tooling","Performance & Efficiency","Security & Access Control","Configuration & Environment","Type & Validation","Documentation & Naming"]);
+const AUDIT_VALID_DIFFS=new Set(["L1","L2","L3","L4"]);
+const AUDIT_VALID_SOURCES=new Set(["real_extraction","synthetic_mutation"]);
+const AUDIT_VALID_LOCS=new Set(["explicit","implicit","cross_file","cross_module"]);
+const AUDIT_VALID_CTXDEPS=new Set(["self_contained","local_context","global_context"]);
+const AUDIT_VALID_TESTMOD=new Set(["unit_test","integration_test","regression_test","performance_test"]);
+
+function auditL1(data){
+  const checks=[];
+  // Required fields
+  const missing=AUDIT_REQUIRED_FIELDS.filter(f=>!(f in data));
+  checks.push({level:'L1',name:'required_fields',passed:!missing.length,detail:missing.length?'missing: '+missing.join(', '):''});
+  // gold_patch
+  const gp=data.patches?.gold_patch;
+  checks.push({level:'L1',name:'gold_patch_exists',passed:!!gp,detail:gp?'':'patches.gold_patch is empty'});
+  // fail_to_pass
+  const ftp=data.fail_to_pass||[];
+  checks.push({level:'L1',name:'fail_to_pass_nonempty',passed:ftp.length>0,detail:ftp.length?ftp.length+' test(s)':'empty list'});
+  // source
+  const src=data.source||'';
+  checks.push({level:'L1',name:'source_valid',passed:AUDIT_VALID_SOURCES.has(src),detail:AUDIT_VALID_SOURCES.has(src)?'':'invalid: '+src});
+  // labels
+  const lab=data.labels||{};
+  const enumChecks=[['category',AUDIT_VALID_CATEGORIES],['difficulty',AUDIT_VALID_DIFFS],['localization',AUDIT_VALID_LOCS],['context_dependency',AUDIT_VALID_CTXDEPS],['test_modality',AUDIT_VALID_TESTMOD]];
+  for(const[fn,validSet]of enumChecks){
+    const v=lab[fn];
+    if(v)checks.push({level:'L1',name:'label_'+fn,passed:validSet.has(v),detail:validSet.has(v)?'':'invalid: '+v});
+  }
+  return checks;
+}
+
+function auditL5(data){
+  const checks=[];
+  const gp=data.patches?.gold_patch||'';
+  const issue=(data.issue_text||'').toLowerCase();
+  // Extract changed files
+  const changedFiles=[...gp.matchAll(/^diff --git a\/(\S+)/gm)].map(m=>m[1]);
+  // Extract symbols from patch
+  const symbols=new Set();
+  for(const line of gp.split('\n')){
+    const m=line.match(/@@.*@@\s*(?:def|class)\s+(\w+)/);
+    if(m)symbols.add(m[1]);
+    if((line.startsWith('+')||line.startsWith('-'))&&!line.startsWith('++')&&!line.startsWith('--')){
+      for(const s of line.matchAll(/\b(\w{4,})\b/g))symbols.add(s[1]);
+    }
+  }
+  let fileOk=false;
+  for(const f of changedFiles){
+    const base=f.split('/').pop().toLowerCase();
+    if(issue.includes(base)){fileOk=true;break}
+    for(const part of f.split('/')){if(part.length>3&&issue.includes(part.toLowerCase())){fileOk=true;break}}
+  }
+  const commonSym=[...symbols].filter(s=>s.length>3&&issue.includes(s.toLowerCase()));
+  const ok=fileOk||commonSym.length>0;
+  const mentions=[];
+  if(fileOk)mentions.push('file name');
+  if(commonSym.length)mentions.push('symbols: '+commonSym.slice(0,5).join(', '));
+  checks.push({level:'L5',name:'patch_issue_coherence',passed:ok,
+    detail:ok?'issue mentions '+mentions.join(', '):'patch modifies '+changedFiles.join(',')+' but issue has no overlap'});
+  return checks;
+}
+
+function auditL6(data){
+  const checks=[];
+  const lab=data.labels||{};
+  const nLines=data.num_lines_changed||0;
+  const nFiles=data.num_files_changed||0;
+  const diff=lab.difficulty||'';
+  // difficulty vs size
+  if(diff==='L1'&&nLines>20)checks.push({level:'L6',name:'difficulty_vs_size',passed:false,detail:`L1 but ${nLines} lines changed`});
+  else if(diff==='L4'&&nLines<5)checks.push({level:'L6',name:'difficulty_vs_size',passed:false,detail:`L4 but only ${nLines} lines`});
+  else checks.push({level:'L6',name:'difficulty_vs_size',passed:true,detail:`${diff}, ${nLines} lines`});
+  // localization vs files
+  const loc=lab.localization||'';
+  if((loc==='cross_file'||loc==='cross_module')&&nFiles<=1)
+    checks.push({level:'L6',name:'localization_vs_files',passed:false,detail:`${loc} but only ${nFiles} file(s)`});
+  else if((loc==='explicit'||loc==='implicit')&&nFiles>5)
+    checks.push({level:'L6',name:'localization_vs_files',passed:false,detail:`${loc} but ${nFiles} files`});
+  else checks.push({level:'L6',name:'localization_vs_files',passed:true,detail:`${loc}, ${nFiles} files`});
+  // category vs test_modality
+  if(lab.category==='Performance & Efficiency'&&lab.test_modality==='unit_test')
+    checks.push({level:'L6',name:'category_vs_test_modality',passed:false,detail:'Performance category with unit_test'});
+  else checks.push({level:'L6',name:'category_vs_test_modality',passed:true});
+  return checks;
+}
+
+async function runQuickAudit(){
+  const selected=_auditCases.filter(c=>c.selected);
+  if(!selected.length){alert('Select at least one case');return}
+  const el=document.getElementById('quickAuditResults');
+  el.innerHTML=`<div class="card"><div class="card-head"><span class="spin"></span> Running quick audit on ${selected.length} case(s)… downloading JSONL data</div></div>`;
+
+  // Download JSONL data for selected cases that haven't been loaded yet
+  let loaded=0;
+  for(const c of selected){
+    if(c.data)continue;
+    try{
+      const url=blobBaseUrl()+'/'+encodeURIComponent(c.name).replace(/%2F/g,'/');
+      const resp=await fetch(url,{headers:blobHeaders()});
+      if(!resp.ok)throw new Error('HTTP '+resp.status);
+      const text=await resp.text();
+      c.data=JSON.parse(text.trim().split('\n')[0]); // first line of JSONL
+      loaded++;
+    }catch(e){c.data={_error:e.message}}
+  }
+
+  // Run L1/L5/L6 on each
+  const allResults=[];
+  for(const c of selected){
+    if(c.data?._error){
+      allResults.push({file:c.shortName,checks:[{level:'ERR',name:'download',passed:false,detail:c.data._error}]});
+      continue;
+    }
+    const checks=[...auditL1(c.data),...auditL5(c.data),...auditL6(c.data)];
+    allResults.push({file:c.shortName,instanceId:c.data.instance_id||'',checks,data:c.data});
+  }
+
+  // Render results
+  renderQuickAuditResults(allResults);
+  renderAuditCases(); // update "loaded" badges
+}
+
+function renderQuickAuditResults(results){
+  const el=document.getElementById('quickAuditResults');
+  // Summary stats
+  let totalChecks=0,totalPassed=0,totalFiles=results.length,filesPassed=0;
+  for(const r of results){
+    const allOk=r.checks.every(c=>c.passed);
+    if(allOk)filesPassed++;
+    for(const c of r.checks){totalChecks++;if(c.passed)totalPassed++}
+  }
+
+  let h=`<div class="card"><div class="card-head"><span class="icon">🔍</span> Quick Audit Results (L1 / L5 / L6)</div><div class="card-body">`;
+  h+=`<div class="summary-grid" style="margin-bottom:14px">
+    <div class="stat-card"><div class="stat-val">${totalFiles}</div><div class="stat-label">Cases Audited</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:${filesPassed===totalFiles?'var(--green)':'var(--red)'}">${filesPassed}/${totalFiles}</div><div class="stat-label">All Checks Passed</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:${totalPassed===totalChecks?'var(--green)':'var(--orange)'}">${totalPassed}/${totalChecks}</div><div class="stat-label">Individual Checks</div></div>
+  </div>`;
+
+  for(const r of results){
+    const allOk=r.checks.every(c=>c.passed);
+    const failCount=r.checks.filter(c=>!c.passed).length;
+    const statusIcon=allOk?'✅':'❌';
+    const statusColor=allOk?'var(--green)':'var(--red)';
+
+    h+=`<div style="border:1px solid var(--border);border-radius:var(--r);margin-bottom:8px;overflow:hidden">
+      <div style="padding:8px 12px;background:var(--surface2);display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
+        <span>${statusIcon}</span>
+        <span style="font-family:monospace;color:var(--cyan);flex:1">${esc(r.file)}</span>
+        ${r.instanceId?`<span style="color:var(--muted);font-size:11px">${esc(r.instanceId)}</span>`:''}
+        <span style="color:${statusColor};font-weight:600;font-size:11px">${allOk?'PASS':failCount+' FAIL'}</span>
+        ${r.data?`<button class="btn-sm" onclick="event.stopPropagation();openModal('${esc(r.file)}',JSON.stringify(${esc(JSON.stringify(r.data))},null,2))" style="font-size:10px">{ } JSON</button>`:''}
+      </div>
+      <div style="display:${allOk?'none':''}">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">`;
+    for(const c of r.checks){
+      const sym=c.passed?'<span style="color:var(--green)">[+]</span>':'<span style="color:var(--red)">[-]</span>';
+      h+=`<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:4px 12px;width:32px">${sym}</td>
+        <td style="padding:4px 8px;font-weight:600;width:40px;color:var(--muted)">${esc(c.level)}</td>
+        <td style="padding:4px 8px;width:180px">${esc(c.name)}</td>
+        <td style="padding:4px 8px;color:var(--muted);font-size:11px">${esc(c.detail||'')}</td>
+      </tr>`;
+    }
+    h+=`</table></div></div>`;
+  }
+  h+=`</div></div>`;
+  el.innerHTML=h;
+}
+
+/* -- Full Audit Pipeline -- */
+async function triggerAuditPipeline(){
+  const level=document.getElementById('auditLevel').value;
+  const pipelineName=document.getElementById('auditPipelineName').value.trim();
+  const auditOutputFolder=document.getElementById('auditOutputFolder').value.trim();
+  const inputFolder=document.getElementById('azOutputFolder').value.trim();
+  const storageAccount=document.getElementById('azStorage').value.trim();
+  const container=document.getElementById('azContainer').value.trim();
+  if(!pipelineName){alert('Set audit pipeline name');return}
+  if(!auditOutputFolder){alert('Set audit output folder');return}
+
+  if(!confirm(`Trigger full audit pipeline (level ${level})?\nInput: ${inputFolder}\nOutput: ${auditOutputFolder}`))return;
+
+  const params={
+    input_folder:inputFolder,
+    output_folder:auditOutputFolder,
+    audit_level:level,
+    storage_account:storageAccount,
+    container:container
+  };
+
+  const el=document.getElementById('quickAuditResults');
+  el.innerHTML=`<div class="status-banner show" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted)"><span class="spin"></span> Triggering audit pipeline…</div>`;
+  try{
+    const data=await azFetch('POST',`/pipelines/${encodeURIComponent(pipelineName)}/createRun?api-version=2018-06-01`,params);
+    el.innerHTML=`<div class="status-banner show ok">✓ Audit pipeline triggered — Run ID:
+      <code style="font-size:12px;color:var(--green);cursor:pointer" onclick="copyText('${esc(data.runId)}','Run ID')">${esc(data.runId)}</code>
+      <button class="btn-copy" style="margin-left:8px" onclick="copyText('${esc(data.runId)}','Run ID')">📋</button>
+      <button class="btn-sm" style="margin-left:8px" onclick="goStep('monitor');refreshMonitor()">View in Monitor →</button>
+    </div>`;
+    toast('Audit pipeline triggered!');
+  }catch(e){
+    el.innerHTML=`<div class="status-banner show err">✕ ${esc(e.message)}</div>`;
+  }
+}
+
+/* -- Audit Results from Blob -- */
+async function loadAuditResults(){
+  const el=document.getElementById('auditResultsContent');
+  const preview=document.getElementById('auditResultPreview');
+  preview.innerHTML='';
+  el.innerHTML='<p class="empty"><span class="spin"></span> Loading audit results…</p>';
+  try{
+    const prefix=document.getElementById('auditOutputFolder').value.trim()+'/';
+    const url=blobBaseUrl()+`?restype=container&comp=list&prefix=${encodeURIComponent(prefix)}&delimiter=`;
+    const resp=await fetch(url,{headers:blobHeaders()});
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    const xml=await resp.text();const parser=new DOMParser();const doc=parser.parseFromString(xml,'text/xml');
+    const blobs=doc.querySelectorAll('Blob');
+    if(!blobs.length){el.innerHTML='<p class="empty">No audit results found in '+esc(prefix)+'</p>';return}
+    const items=[];
+    blobs.forEach(b=>{
+      const name=b.querySelector('Name')?.textContent||'';
+      const size=parseInt(b.querySelector('Content-Length')?.textContent||'0');
+      const modified=b.querySelector('Last-Modified')?.textContent||'';
+      items.push({name,shortName:name.replace(prefix,''),size,modified});
+    });
+    items.sort((a,b)=>new Date(b.modified)-new Date(a.modified));
+
+    let h=`<div style="font-size:11px;color:var(--muted);padding:4px 0 8px">${items.length} files in <code>${esc(prefix)}</code></div>`;
+    for(const f of items){
+      const isJson=f.shortName.endsWith('.json');
+      h+=`<div class="blob-file" ${isJson?`style="cursor:pointer" onclick="previewAuditResult('${f.name.replace(/'/g,"\\'")}')"`:''}>
+        <span class="blob-icon">${isJson?'📊':'📄'}</span>
+        <span class="blob-name">${esc(f.shortName)}</span>
+        <span class="blob-size">${fmtBytes(f.size)}</span>
+        <span class="blob-size">${fmtTime(f.modified)}</span>
+        ${isJson?`<button class="btn-sm" onclick="event.stopPropagation();previewAuditResult('${f.name.replace(/'/g,"\\'")}')">View</button>`:''}
+      </div>`;
+    }
+    el.innerHTML=h;
+  }catch(e){el.innerHTML=`<p class="empty" style="color:var(--red)">${corsErrorHtml(e.message)}</p>`}
+}
+
+async function previewAuditResult(blobName){
+  const el=document.getElementById('auditResultPreview');
+  el.innerHTML=`<div class="blob-preview"><span class="spin"></span> Loading…</div>`;
+  try{
+    const url=blobBaseUrl()+'/'+encodeURIComponent(blobName).replace(/%2F/g,'/');
+    const resp=await fetch(url,{headers:blobHeaders()});
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    const text=await resp.text();
+    let parsed;
+    try{parsed=JSON.parse(text)}catch{}
+
+    if(Array.isArray(parsed)){
+      // Render as audit report cards
+      let h='<div style="margin-top:12px">';
+      for(const r of parsed){
+        const allOk=r.passed;
+        const checks=r.checks||[];
+        const failCount=checks.filter(c=>!c.passed).length;
+        h+=`<div style="border:1px solid var(--border);border-radius:var(--r);margin-bottom:8px;overflow:hidden">
+          <div style="padding:8px 12px;background:var(--surface2);display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
+            <span>${allOk?'✅':'❌'}</span>
+            <span style="font-family:monospace;color:var(--cyan);flex:1">${esc(r.instance_id||'')}</span>
+            <span style="color:${allOk?'var(--green)':'var(--red)'};font-weight:600;font-size:11px">${allOk?'ALL PASS':failCount+' FAIL'}</span>
+          </div>
+          <div style="display:${allOk?'none':''}"><table style="width:100%;border-collapse:collapse;font-size:12px">`;
+        for(const c of checks){
+          const sym=c.passed?'<span style="color:var(--green)">[+]</span>':'<span style="color:var(--red)">[-]</span>';
+          h+=`<tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:4px 12px;width:32px">${sym}</td>
+            <td style="padding:4px 8px;font-weight:600;width:40px;color:var(--muted)">${esc(c.level)}</td>
+            <td style="padding:4px 8px;width:180px">${esc(c.name)}</td>
+            <td style="padding:4px 8px;color:var(--muted);font-size:11px">${esc(c.detail||'')}</td></tr>`;
+        }
+        h+=`</table></div></div>`;
+      }
+      h+='</div>';
+      el.innerHTML=h;
+    } else {
+      el.innerHTML=`<div class="blob-preview">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-weight:600;font-size:12px;color:var(--accent);flex:1">${esc(blobName.split('/').pop())}</span>
+          <button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById('auditText').textContent);toast('Copied!')">📋 Copy</button>
+        </div>
+        <pre id="auditText">${esc(typeof parsed==='object'?JSON.stringify(parsed,null,2):text)}</pre>
+      </div>`;
+    }
+  }catch(e){el.innerHTML=`<div class="blob-preview"><p style="color:var(--red)">${corsErrorHtml(e.message)}</p></div>`}
+}
+
+/* ==================== Persistence ==================== */
+const STORAGE_KEY='swebench_prompt_gen';
+function saveState(){
+  try{
+    const settingIds=['azSub','azRg','azFactory','azPipeline','azStorage','azContainer','azOutputFolder','azModel','azTimeout','azToken','azBlobToken','azBatchToken','azBatchEndpoint','batchPoolFilter','auditPipelineName','auditOutputFolder','auditLevel'];
+    const settings={};
+    for(const id of settingIds){const el=document.getElementById(id);if(el)settings[id]=el.value}
+    const tasks=[];
+    for(const tr of document.getElementById('taskBody').children){
+      const repo=tr.querySelector('input[type=text]').value;
+      const cat=tr.querySelectorAll('select')[0]?.value||'';
+      const diff=tr.querySelectorAll('select')[1]?.value||'';
+      const num=tr.querySelector('input[type=number]')?.value||'3';
+      tasks.push({repo,cat,diff,num});
+    }
+    const sub=document.getElementById('blobSubfolder')?.value||'jsonl';
+    localStorage.setItem(STORAGE_KEY,JSON.stringify({settings,tasks,blobSubfolder:sub,ts:Date.now()}));
+  }catch(e){}
+}
+function loadState(){
+  try{
+    const raw=localStorage.getItem(STORAGE_KEY);if(!raw)return false;
+    const state=JSON.parse(raw);
+    if(state.settings){for(const[id,val]of Object.entries(state.settings)){const el=document.getElementById(id);if(el&&val)el.value=val}}
+    if(state.tasks?.length){document.getElementById('taskBody').innerHTML='';for(const t of state.tasks)addRow(t.repo||'',t.cat||'',t.diff||'',parseInt(t.num)||3)}
+    if(state.blobSubfolder){const sel=document.getElementById('blobSubfolder');if(sel)sel.value=state.blobSubfolder}
+    return true;
+  }catch(e){return false}
+}
+function autoSave(){
+  document.addEventListener('input',()=>{clearTimeout(autoSave._t);autoSave._t=setTimeout(saveState,500)});
+  document.addEventListener('change',()=>{clearTimeout(autoSave._t);autoSave._t=setTimeout(saveState,300)});
+  const observer=new MutationObserver(()=>{clearTimeout(autoSave._t);autoSave._t=setTimeout(saveState,500)});
+  observer.observe(document.getElementById('taskBody'),{childList:true});
+}
+
+/* ==================== Init ==================== */
+initSelects();
+const restored=loadState();
+if(!restored)addRow();
+updateCount();
+autoSave();
+syncMonitorLabels();
+// Restore active tab and auto-refresh if on monitor/results
+try{
+  const tab=localStorage.getItem('swebench_active_tab');
+  if(tab && STEPS.includes(tab)){
+    goStep(tab);
+    if(tab==='monitor')setTimeout(refreshMonitor,300);
+    if(tab==='results')setTimeout(refreshBlobs,300);
+    if(tab==='audit')setTimeout(loadAuditCases,300);
+  }
+}catch{}
+</script>
+</body>
+</html>

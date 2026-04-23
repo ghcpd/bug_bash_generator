@@ -141,8 +141,10 @@ def _parse_setup_py_extras(repo: Path) -> list[str]:
 # Python version detection
 # ---------------------------------------------------------------------------
 
-# Supported slim image tags, lowest first (pick minimum compatible version for max stability)
-_SUPPORTED_VERSIONS = ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+# Supported slim image tags (must have active Docker Hub images).
+# Prefer _DEFAULT_VERSION (3.11) for max stability: last version with `imp` module,
+# broad library support, well-tested on all major packages.
+_SUPPORTED_VERSIONS = ["3.9", "3.10", "3.11", "3.12", "3.13"]
 _DEFAULT_VERSION = "3.11"
 
 
@@ -233,9 +235,14 @@ def _detect_python_version(repo: Path) -> str:
 def _parse_requires_python(spec: str) -> str | None:
     """Extract the best Docker image version from a PEP 440 requires-python spec.
 
+    Prefers _DEFAULT_VERSION (3.11) for stability. Falls back to the closest
+    compatible version when 3.11 doesn't satisfy the constraints.
+
     Examples:
-        '>=3.10'       → '3.13'  (highest supported that satisfies)
-        '>=3.10,<3.13' → '3.12'
+        '>=3.8'        → '3.11'  (prefer default within range)
+        '>=3.10'       → '3.11'
+        '>=3.12'       → '3.12'  (forced — default too low)
+        '>=3.10,<3.12' → '3.11'
         '==3.11.*'     → '3.11'
     """
     spec = spec.strip()
@@ -261,13 +268,24 @@ def _parse_requires_python(spec: str) -> str | None:
     if lower is None:
         return None
 
-    # Pick highest supported version that satisfies the bounds
+    # Collect all compatible versions
+    compatible = []
     for v in _SUPPORTED_VERSIONS:
         if _ver_tuple(v) >= _ver_tuple(lower):
             if upper and _ver_tuple(v) >= _ver_tuple(upper):
                 continue
-            return v
-    return None
+            compatible.append(v)
+
+    if not compatible:
+        return None
+
+    # Prefer _DEFAULT_VERSION if it satisfies the constraints
+    if _DEFAULT_VERSION in compatible:
+        return _DEFAULT_VERSION
+
+    # Otherwise pick the version closest to _DEFAULT_VERSION
+    default_minor = _ver_tuple(_DEFAULT_VERSION)[1]
+    return min(compatible, key=lambda v: abs(_ver_tuple(v)[1] - default_minor))
 
 
 def _ver_tuple(v: str) -> tuple[int, ...]:
@@ -466,6 +484,13 @@ def generate_dockerfile(
     lines.append(f"RUN {PY} -m pip install -e . --no-deps 2>/dev/null \\")
     lines.append(f"    || SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 {PY} -m pip install -e . --no-deps 2>/dev/null \\")
     lines.append("    || true")
+    lines.append("")
+
+    # -- Ensure modern pytest survives all dependency installations
+    # Some repos' transitive deps can downgrade pytest to a version that uses
+    # the removed `imp` module (Python 3.12+). Re-install after everything else.
+    lines.append("# Ensure modern pytest (old pytest uses removed `imp` module on Python 3.12+)")
+    lines.append(f"RUN {PY} -m pip install --force-reinstall 'pytest>=7.0' 2>/dev/null || true")
     lines.append("")
 
     lines.append('CMD ["python3"]')

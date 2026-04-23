@@ -194,6 +194,11 @@ def write_jsonl(
         "mutation_type": case.get("sub_type", ""),
         "mutation_description": case.get("mutation_description", ""),
         "mutation_file": case.get("mutation_file", ""),
+        "feature_keyword": case.get("feature_keyword", ""),
+        "feature_direction": case.get("feature_direction", ""),
+        "repo_description": case.get("repo_description", ""),
+        "feature_description": case.get("feature_description", ""),
+        "bug_description": case.get("bug_description", ""),
         "batch_version": case.get("batch_version", ""),
         "num_files_changed": len(set(re.findall(
             r'^diff --git a/(.*?) b/', case.get("patch", ""), re.MULTILINE))),
