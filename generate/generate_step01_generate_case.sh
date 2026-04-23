@@ -515,7 +515,7 @@ if ! command -v envsubst &>/dev/null; then
     echo "ERROR: envsubst not found — falling back to raw template" >&2
     PROMPT_TEMPLATE="$PROMPT_TEMPLATE_RAW"
 else
-    PROMPT_TEMPLATE=$(echo "$PROMPT_TEMPLATE_RAW" | envsubst)
+    PROMPT_TEMPLATE=$(echo "$PROMPT_TEMPLATE_RAW" | envsubst '${REPO_NAME} ${WORK_DIR} ${DEPS_IMAGE} ${FEATURE_PLAN} ${REPO_URL} ${REPO_OWNER}')
 fi
 echo "DEBUG: PROMPT_TEMPLATE length = ${#PROMPT_TEMPLATE}"
 
