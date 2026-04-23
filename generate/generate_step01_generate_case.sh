@@ -253,22 +253,7 @@ if [ "$CASE_INDEX" -ne "$ORIGINAL_CASE_INDEX" ]; then
     echo "=== Auto-incremented case index: ${ORIGINAL_CASE_INDEX} → ${CASE_INDEX} ==="
 fi
 
-# Collect previously generated mutation files for diversity hints
-PREV_MUTATIONS=""
-for PREV_JSONL in $(find "$JSONL_DIR" \( -name "gen-case__*.jsonl" -o -name "feature-*.jsonl" \) 2>/dev/null | sort); do
-    MUT_FILE=$(python3 -c "
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        d = json.loads(f.readline())
-    print(d.get('mutation_file', ''))
-except Exception:
-    print('')
-" "$PREV_JSONL" 2>/dev/null)
-    if [ -n "$MUT_FILE" ]; then
-        PREV_MUTATIONS="${PREV_MUTATIONS}- ${MUT_FILE}\n"
-    fi
-done
+# (PREV_MUTATIONS removed — no longer needed in new 3-session architecture)
 
 # ── Clone repository ─────────────────────────────────────────────────────────
 git clone --depth 1 "$REPO_URL" "$WORK_DIR/repo"
@@ -506,17 +491,35 @@ echo "=== Generating case ${CASE_INDEX} for ${REPO_SLUG} (${INSTANCE_ID}) ==="
 # Read Session 0 feature plan if available, strip "Blast radius" lines
 # (those are for internal evaluation only — showing them to S1 would make it
 # "be careful" around those areas, reducing the chance of natural bugs)
+echo "DEBUG: checkpoint 1 — reading feature plan"
 FEATURE_PLAN=""
 if [ -f "$WORK_DIR/feature_plan.txt" ]; then
-    FEATURE_PLAN=$(grep -v '^\- \*\*Blast radius\*\*' "$WORK_DIR/feature_plan.txt" | grep -v '^\- \*\*影响范围\*\*')
+    FEATURE_PLAN=$(grep -v '^\- \*\*Blast radius\*\*' "$WORK_DIR/feature_plan.txt" | grep -v '^\- \*\*影响范围\*\*' || true)
     echo "=== Feature plan loaded: $(wc -l < "$WORK_DIR/feature_plan.txt") lines (blast radius stripped) ==="
+else
+    echo "DEBUG: feature_plan.txt not found — S0 may have failed"
+fi
+echo "DEBUG: FEATURE_PLAN length = ${#FEATURE_PLAN}"
+
+# Set default if empty (envsubst doesn't support ${VAR:-default} syntax)
+if [ -z "$FEATURE_PLAN" ]; then
+    FEATURE_PLAN="No specific directions provided. Use your own judgment to identify improvements based on the codebase."
 fi
 
 # Expand variables inside the prompt template (${REPO_NAME}, ${WORK_DIR}, etc.)
 # cat reads the file as literal text; envsubst does variable substitution.
+echo "DEBUG: checkpoint 2 — envsubst"
+echo "DEBUG: PROMPT_TEMPLATE_RAW length = ${#PROMPT_TEMPLATE_RAW}"
 export REPO_NAME WORK_DIR DEPS_IMAGE FEATURE_PLAN REPO_URL REPO_OWNER
-PROMPT_TEMPLATE=$(echo "$PROMPT_TEMPLATE_RAW" | envsubst)
+if ! command -v envsubst &>/dev/null; then
+    echo "ERROR: envsubst not found — falling back to raw template" >&2
+    PROMPT_TEMPLATE="$PROMPT_TEMPLATE_RAW"
+else
+    PROMPT_TEMPLATE=$(echo "$PROMPT_TEMPLATE_RAW" | envsubst)
+fi
+echo "DEBUG: PROMPT_TEMPLATE length = ${#PROMPT_TEMPLATE}"
 
+echo "DEBUG: checkpoint 3 — building full_prompt.md"
 cat > "$WORK_DIR/full_prompt.md" << PROMPT_EOF
 ${PROMPT_TEMPLATE}
 
@@ -524,7 +527,6 @@ ${PROMPT_TEMPLATE}
 - Repository: ${REPO_URL}
 - Project: ${REPO_OWNER}/${REPO_NAME}
 $([ -n "$FEATURE_TARGET" ] && echo -e "\n### Assigned Feature Target (MANDATORY)\nYour feature MUST primarily modify \`${FEATURE_TARGET}\`.\nYou may also touch other files if the feature naturally requires it, but the main behavioral change MUST be in this file.")
-$([ -n "$PREV_MUTATIONS" ] && echo -e "\n### Previously Used Files (DO NOT mutate these again)\n${PREV_MUTATIONS}")
 
 ### Repository Structure
 \`\`\`

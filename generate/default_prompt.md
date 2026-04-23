@@ -15,7 +15,7 @@ Hey Kevin, I did a quick review of the ${REPO_NAME} codebase last week and put t
 
 Here are my notes:
 
-${FEATURE_PLAN:-No specific directions provided. Use your own judgment to identify improvements.}
+${FEATURE_PLAN}
 
 ---
 
