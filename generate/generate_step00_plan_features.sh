@@ -32,7 +32,7 @@ S0_PROMPT=$(cat "$S0_PROMPT_FILE")
 
 echo "=== Calling $MODEL in agent mode (timeout=${TIMEOUT}s) ==="
 
-# Run copilot in agent mode — it will use cat/find/grep to read the repo
+# Run copilot in agent mode — it reads the repo and writes feature_plan.txt itself
 PLAN_EXIT=0
 cd "$REPO_DIR"
 timeout "$TIMEOUT" copilot \
@@ -40,7 +40,7 @@ timeout "$TIMEOUT" copilot \
     --model "$MODEL" \
     --no-ask-user \
     --allow-all \
-    > "$OUTPUT_FILE" \
+    > /dev/null \
     2>"${OUTPUT_FILE}.log" || PLAN_EXIT=$?
 
 if [ "$PLAN_EXIT" -eq 124 ]; then
@@ -50,6 +50,12 @@ elif [ "$PLAN_EXIT" -ne 0 ]; then
     echo "ERROR: Planning failed with exit code $PLAN_EXIT" >&2
     cat "${OUTPUT_FILE}.log" >&2 2>/dev/null || true
     exit 1
+fi
+
+# The model should have written feature_plan.txt in the repo dir
+# Copy it to the expected output path if it's not already there
+if [ -f "$REPO_DIR/feature_plan.txt" ] && [ "$REPO_DIR/feature_plan.txt" != "$OUTPUT_FILE" ]; then
+    cp "$REPO_DIR/feature_plan.txt" "$OUTPUT_FILE"
 fi
 
 if [ ! -s "$OUTPUT_FILE" ]; then

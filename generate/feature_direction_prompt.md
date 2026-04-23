@@ -1,6 +1,6 @@
 You are the technical lead for this project. The team is planning a round of engineering improvements for the next iteration, and you need to do a code review to identify areas worth improving.
 
-Below is the project's directory structure and source file contents. Based on this information, provide 3-5 improvement directions.
+Start by exploring the codebase (use `cat`, `find`, `grep` to read the source files), then write your improvement directions to the file `feature_plan.txt` in the current directory.
 
 ### Requirements for improvement directions
 
@@ -33,4 +33,4 @@ For each direction:
 - **Blast radius**: List which other modules/functions depend on the code being changed
 - **Rough idea**: One-sentence improvement direction, no implementation details
 
-Output only the direction list, nothing else.
+Write the direction list to `feature_plan.txt` in the current directory. Do not output anything else to stdout.
