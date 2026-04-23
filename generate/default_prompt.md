@@ -23,4 +23,9 @@ OK so here's my setup — the repo is already cloned at ${WORK_DIR}/repo and tha
 
 Let's start with the refactoring items first, then move on to features. Run tests after each change. If a test breaks, try to fix it — but don't spend too long debugging. If it's still failing after a couple of attempts, just commit what you have and move on to the next item. Sarah will follow up.
 
+A few things to keep in mind:
+- Do NOT create any new test files — we only use the project's existing tests
+- Do NOT revert your changes with `git checkout` — leave the repo as-is even if something is broken
+- Do NOT `pip install` on the host — the container has everything
+
 Go ahead and start exploring the code, then work through Sarah's directions.
