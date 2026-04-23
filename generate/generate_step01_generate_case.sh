@@ -475,7 +475,9 @@ fi
 
 # ── Generate case (with auto-retry on quality failures) ──────────────────────
 MAX_RETRIES="${MAX_RETRIES:-3}"
-PROMPT_TEMPLATE=$(cat "$PROMPT_PATH")
+# Read prompt template — variables like ${REPO_NAME} inside it won't be expanded
+# by cat; they'll be expanded later when we use envsubst or heredoc eval.
+PROMPT_TEMPLATE_RAW=$(cat "$PROMPT_PATH")
 TASK_TS=$(date +%Y%m%d%H%M%S)
 TASK_RUN_ID="${REPO_SLUG}-task-${TASK_TS}-${CASE_INDEX}"
 ATTEMPT_METRICS_DIR="$WORK_DIR/copilot_metrics"
@@ -509,6 +511,11 @@ if [ -f "$WORK_DIR/feature_plan.txt" ]; then
     FEATURE_PLAN=$(grep -v '^\- \*\*Blast radius\*\*' "$WORK_DIR/feature_plan.txt" | grep -v '^\- \*\*影响范围\*\*')
     echo "=== Feature plan loaded: $(wc -l < "$WORK_DIR/feature_plan.txt") lines (blast radius stripped) ==="
 fi
+
+# Expand variables inside the prompt template (${REPO_NAME}, ${WORK_DIR}, etc.)
+# cat reads the file as literal text; envsubst does variable substitution.
+export REPO_NAME WORK_DIR DEPS_IMAGE FEATURE_PLAN REPO_URL REPO_OWNER
+PROMPT_TEMPLATE=$(echo "$PROMPT_TEMPLATE_RAW" | envsubst)
 
 cat > "$WORK_DIR/full_prompt.md" << PROMPT_EOF
 ${PROMPT_TEMPLATE}
